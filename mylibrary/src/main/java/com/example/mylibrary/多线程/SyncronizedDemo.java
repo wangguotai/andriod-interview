@@ -10,8 +10,9 @@ public class SyncronizedDemo {
             synchronized (lock) {
                 try {
 //                    lock = new Object();
+                    Thread.sleep(200);
+
                     System.out.println("now lock is " + lock);
-                    Thread.sleep(2000);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
@@ -21,9 +22,9 @@ public class SyncronizedDemo {
         new Thread(()->{
             synchronized (lock) {
                 try {
-//                    lock = new Object();
                     System.out.println("now lock is " + lock);
-                    Thread.sleep(2000);
+                    lock = new Object();
+                    Thread.sleep(5000);
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }

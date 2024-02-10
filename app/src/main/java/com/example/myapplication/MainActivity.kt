@@ -17,5 +17,6 @@ class MainActivity : ComponentActivity() {
                 setSpan(ForegroundColorSpan(Color.GREEN), 0, 5, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
         }
+        println(classLoader.toString())
     }
 }

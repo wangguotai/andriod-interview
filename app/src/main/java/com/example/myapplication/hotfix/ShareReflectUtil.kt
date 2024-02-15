@@ -89,7 +89,7 @@ object ShareReflectUtil {
         IllegalArgumentException::class,
         IllegalAccessException::class
     )
-    fun expandFieldArray(instance: Any, fieldName: String, patchElements: Array<*>) {
+    fun expandFieldArray(instance: Any, fieldName: String, patchElements: Array<*>):Any {
         //拿到 classloader中的dexElements 数组
         val dexElementsField = findField(instance, fieldName)
         //old Element[]
@@ -108,5 +108,6 @@ object ShareReflectUtil {
 
         //修改 classLoader中 pathList的 dexElements
         dexElementsField[instance] = newElements
+        return newElements
     }
 }

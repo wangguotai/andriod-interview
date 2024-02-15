@@ -27,7 +27,9 @@ class HotFix {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
 //                    ClassLoaderInjector.inject(application, classLoader, files)
-                    V23.install(classLoader, files, dexOptDir)
+
+                    V23.install(classLoader, files, dexOptDir, application)
+
 
                 } catch (throwable: Throwable) {
                     Log.d(TAG, throwable.message ?: "")
@@ -37,7 +39,7 @@ class HotFix {
                 try {
                     // 23 6.0及以上
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        V23.install(classLoader, files, dexOptDir)
+//                        V23.install(classLoader, files, dexOptDir)
                     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
                         // 19 4.4以上
                         V19.install(classLoader, files, dexOptDir)
@@ -66,7 +68,8 @@ class HotFix {
         fun install(
             loader: ClassLoader,
             additionalClassPathEntries: List<File>,
-            optimizedDirectory: File
+            optimizedDirectory: File,
+            application: Application
         ) {
             //找到 pathList
             val pathListField: Field = findField(loader, "pathList")
@@ -81,7 +84,22 @@ class HotFix {
             )
 
             //将原本的 dexElements 与 makePathElements生成的数组合并
+//            val resultDexElements =  ShareReflectUtil.expandFieldArray(dexPathList, "dexElements", patchElements)
             ShareReflectUtil.expandFieldArray(dexPathList, "dexElements", patchElements)
+
+//            val dispatchClassLoader =
+//                ClassLoaderInjector.DispatchClassLoader(application.javaClass.name, loader)
+//            val newClassLoader = ClassLoaderInjector.createNewClassLoader(application, loader, dispatchClassLoader, additionalClassPathEntries)
+            //找到 pathList
+//            val newPathListField: Field = findField(newClassLoader, "pathList")
+//            val newPathList = newPathListField.get(newClassLoader)
+//            val dexElementsField = findField(newPathList, "dexElements")
+//            // 获取新ClassLoader的dexElement，并替换
+//            var dexElements = dexElementsField.get(newPathList)
+//            dexElements = resultDexElements
+            // 从 pathList找到 makePathElements 方法并执行
+            // 得到补丁创建的 Element[]
+//            ClassLoaderInjector.doInject(application, newClassLoader)
             if (suppressedExceptions.size > 0) {
                 for (e in suppressedExceptions) {
                     Log.w(TAG, "Exception in makePathElement", e)

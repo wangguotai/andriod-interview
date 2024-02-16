@@ -1,4 +1,4 @@
-package com.interview.leakcanary
+package com.interview.LeakHelper
 
 import java.lang.ref.ReferenceQueue
 import java.lang.ref.WeakReference
@@ -8,12 +8,12 @@ import java.util.concurrent.locks.LockSupport
 /**
  * Time: 2024/2/15
  * Author: wgt
- * Description:
+ * Description: 基于ReferenceQueue的原理构建一个LeakHelper的简易Demo模型 用于理解解决面试问题
  */
-class Demo {
+class LeakHelperDemo {
     val activity = Activity(ActivityLifeCycleOwnerImpl)
 
-    class Activity(val lifeCycleManager: ActivityLifeCycleOwner) {
+    class Activity(private val lifeCycleManager: ActivityLifeCycleOwner) {
         val tag = javaClass.simpleName
         fun onDestroy() {
             lifeCycleManager.updateLifecycleState(LifecycleState.DESTROYED, WeakReference(this))
@@ -36,15 +36,6 @@ class Demo {
     }
 
     object ActivityLifeCycleOwnerImpl : ActivityLifeCycleOwner {
-        //        val queue = LinkedList<WeakReference<Activity>>()
-//        val queue = LinkedList<WeakReference<Activity>>()
-//        fun onDestroy() {
-//            for (a in queue) {
-//                if (a.get() == null){
-//                    queue.remove()
-//                }
-//            }
-//        }
         private val listeners = mutableListOf<LeakLifecycleListener>()
         override fun register(listener: LeakLifecycleListener) {
             listeners.add(listener)
@@ -88,41 +79,41 @@ class Demo {
         }
     }
 
-    class LeakCanary : LeakLifecycleListener, GCObserver {
+    class LeakHelper : LeakLifecycleListener, GCObserver {
         private val mReferenceQueue = ReferenceQueue<Activity>()
         private val mDestroyedActivityTagList = LinkedList<String>()
         private val weakRefList = mutableListOf<WatchedActivityReference>()
+        // 开启一个单独的线程处理内存泄漏的监控
         private val mWatchedThread = Thread {
             try {
                 while (true) {
                     LockSupport.park()
                     // 防止GC干扰
-//                        synchronized(referenceQueue) {
-                    var ref: WatchedActivityReference?
-                    while (mReferenceQueue.poll().also {
-                            ref = it as WatchedActivityReference?
-                        } != null) {
-                        ref?.activityName?.let {
-                            mDestroyedActivityTagList.remove(it)
-                            println("$it has been properly recycled.")
+                    synchronized(mReferenceQueue) {
+                        var ref: WatchedActivityReference?
+                        while (mReferenceQueue.poll().also {
+                                ref = it as WatchedActivityReference?
+                            } != null) {
+                            ref?.activityName?.let {
+                                mDestroyedActivityTagList.remove(it)
+                                println("$it has been properly recycled.")
+                            }
+                        }
+                        mDestroyedActivityTagList.forEach {
+                            println("Leaking founded in $it")
                         }
                     }
-                    mDestroyedActivityTagList.forEach {
-                        println("Leaking founded in $it")
-                    }
-//                        }
                 }
             } catch (e: InterruptedException) {
                 e.printStackTrace()
             }
         }
-//            WatcherThread(mReferenceQueue, mDestroyedActivityTagList) // 检测是否发生泄漏的线程
-
-        // 将LeakCanary与LifecycleManager绑定接收触发onDestroy的对象
+        /**
+         * 将LeakHelper作为事件接受器绑定到 Activity的生命周期管理和GC事件发生的监听中
+         */
         fun install() {
             GCMonitorObserveOwner.register(this) // 注册GC回收发生
             ActivityLifeCycleOwnerImpl.register(this)  // 注册生命周期
-
         }
 
 
@@ -147,39 +138,6 @@ class Demo {
         override fun onGC() {
             LockSupport.unpark(mWatchedThread)
         }
-
-//        class WatcherThread(
-////            val referenceQueue: ReferenceQueue<Activity>,
-////            val destroyedActivityList: MutableList<String>
-//        ) : Thread() {
-//            override fun run() {
-//                try {
-//                    while (true) {
-//                        LockSupport.park()
-//                        // 防止GC干扰
-//                        Thread.sleep(10000)
-////                        synchronized(referenceQueue) {
-//                        var ref: WatchedActivityReference?
-//                        while (referenceQueue.poll().also {
-//                                ref = it as WatchedActivityReference?
-//                            } != null) {
-//                            ref?.activityName?.let {
-//                                destroyedActivityList.remove(it)
-//                                println("$it has been properly recycled.")
-//                            }
-//                        }
-//                        destroyedActivityList.forEach {
-//                            println("Leaking founded in $it")
-//                        }
-////                        }
-//                    }
-//                } catch (e: InterruptedException) {
-//                    e.printStackTrace()
-//                }
-//            }
-//
-//        }
-
         class WatchedActivityReference : WeakReference<Activity> {
             lateinit var activityName: String
 
@@ -194,11 +152,11 @@ class Demo {
 }
 
 fun main() {
-    var demo: Demo? = Demo()
-    val leakCanary = Demo.LeakCanary() // 改成单例的实现即可
-    leakCanary.install()
+    var demo: LeakHelperDemo? = LeakHelperDemo()
+    val leakHelper = LeakHelperDemo.LeakHelper() // 改成单例的实现即可
+    leakHelper.install()
     demo!!.activity.onDestroy()
-//    demo = null
+    demo = null
     System.gc()
     println("After GC")
 //    Thread.sleep(4000)

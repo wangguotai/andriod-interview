@@ -1,4 +1,4 @@
-package com.interview.leakcanary;
+package com.interview.leak;
 
 import java.lang.ref.PhantomReference;
 import java.lang.ref.ReferenceQueue;

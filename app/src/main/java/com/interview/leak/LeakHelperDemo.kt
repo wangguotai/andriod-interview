@@ -97,11 +97,14 @@ class LeakHelperDemo {
                             ref?.activityName?.let {
                                 mDestroyedActivityTagList.remove(it)
                                 println("$it has been properly recycled.")
+                                weakRefList.remove(ref) // 同时将虚引用从列表中剔除
                             }
                         }
                         mDestroyedActivityTagList.forEach {
                             println("Leaking founded in $it")
                         }
+                        // TODO 泄漏的对象引用存储在weakRefList中，可用于后续的引用链分析
+                        // 处理引用链
                     }
                 }
             } catch (e: InterruptedException) {

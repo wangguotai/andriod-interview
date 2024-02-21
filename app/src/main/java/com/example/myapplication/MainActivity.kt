@@ -15,10 +15,15 @@ class MainActivity : ComponentActivity() {
         setContentView(R.layout.layout_main)
         findViewById<TextView>(R.id.textView).apply {
             text = SpannableString("SpannedString").apply {
-                setSpan(ForegroundColorSpan(Color.GREEN), 0, 5, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                setSpan(
+                    ForegroundColorSpan(Color.GREEN),
+                    0,
+                    5,
+                    SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
             }
         }
+
         println(classLoader.toString())
-//        Demo.test()
     }
 }

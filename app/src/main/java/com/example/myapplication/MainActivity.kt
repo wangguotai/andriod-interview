@@ -19,6 +19,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         println(classLoader.toString())
-        Demo.test()
+//        Demo.test()
     }
 }

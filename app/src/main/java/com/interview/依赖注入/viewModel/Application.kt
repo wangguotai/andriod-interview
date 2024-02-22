@@ -1,18 +1,5 @@
 package com.interview.依赖注入.viewModel
 
-/**
- * 模拟Application的运行
- */
-class Application {
-    fun onCreate() {
-
-    }
-
-    fun initViewModel() {
-
-    }
-}
-
 // 实现一个简单的依赖容器
 object DIContainerV1 {
     private val dependencies = mutableMapOf<Class<*>, Any>()
@@ -29,18 +16,31 @@ object DIContainerV1 {
 }
 
 // ******************* V2 增添必要的描述提供单例模式支持 ******
-//data class DependencyDescriptor<T>(val provider: ()-> T, val isSingleton: Boolean = true)
-//// 标识ViewModel
-//internal interface ViewModel
-//internal typealias Factory = ()-> ViewModel
-//object DIContainer {
-//    // 存储依赖项的映射
-//    private val dependencies = mutableMapOf<Class<*>, DependencyDescriptor<*>>()
-//    // 存储viewModel的工厂函数
-//    private val viewModelFactories = mutableMapOf<Class<out ViewModel>, Factory>()
-//    // 注册依赖项
-//    inline fun<reified T: Any> provide()
-//}
+data class DependencyDescriptor<T>(val provider: () -> T, val isSingleton: Boolean = true) {
+    val instance: T by lazy {
+        provider()
+    }
+}
+
+object DIContainer {
+    // 存储依赖项的映射
+    val dependencies = mutableMapOf<Class<*>, DependencyDescriptor<*>>()
+    // 注册依赖项
+    inline fun <reified T : Any> provide(noinline provider: () -> T, isSingleton: Boolean = true) {
+        dependencies[T::class.java] = DependencyDescriptor(provider, isSingleton)
+    }
+
+    // 获取依赖项
+    inline fun <reified T : Any> get(): T {
+        val descriptor = dependencies[T::class.java]
+            ?: throw java.lang.IllegalArgumentException("${T::class.java} Dependency not fond")
+        return if (descriptor.isSingleton) {
+            descriptor.instance as T
+        } else {
+            descriptor.provider() as T
+        }
+    }
+}
 
 
 // 使用示例
@@ -48,18 +48,26 @@ interface MyService {
     fun doSth()
 }
 
-class MyServiceImpl: MyService {
+class MyServiceA : MyService {
     override fun doSth() {
-        println("Doing sth")
+        println("Doing sthA")
     }
-
+}
+class MyServiceB : MyService {
+    override fun doSth() {
+        println("Doing sthB")
+    }
 }
 fun main() {
-    aaa {
-        println("in block")
-        return
-    }
-    println("in main")
+    DIContainer.provide<MyServiceA>({ MyServiceA() })
+    DIContainer.provide<MyServiceB>({ MyServiceB() }, false)
+    val myServiceA1 = DIContainer.get<MyServiceA>()
+    val myServiceA2 = DIContainer.get<MyServiceA>()
+    val myServiceB1 = DIContainer.get<MyServiceB>()
+    val myServiceB2 = DIContainer.get<MyServiceB>()
+
+    println(myServiceA1.doSth())
+
 }
 
 //fun main() {
@@ -71,8 +79,3 @@ fun main() {
 //    // 模拟生命周期中的onCreate调用
 ////    Application().onCreate()
 //}
- inline fun aaa(block: ()->Unit){
-    println("in aaa")
-    block()
-    println("final in aaa")
-}

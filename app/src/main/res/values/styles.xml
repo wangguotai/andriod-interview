@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 声明一个CustomViewGroup默认style   -->
+    <style name="CustomViewGroupStyle">
+        <item name="android:textColor">#ff0000</item>
+        <item name="android:textSize">20sp</item>
+        <item name="layout_simple_attr_1">2</item>
+        <item name="android:background">#FF5722</item>
+    </style>
+</resources>

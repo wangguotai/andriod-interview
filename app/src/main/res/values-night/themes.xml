@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--  配置一个style,用于CustomViewGroup的实现  -->
+    <style name="CustomViewGroupStyle.night" parent="Theme.MyApplication">
+        <!--  使用你在attrs中声明的style属性      -->
+        <item name="layout_simple_attr_1">1</item>
+        <!--  使用系统定义的Theme属性      -->
+        <item name="android:background">#5C665E</item>
+    </style>
+</resources>

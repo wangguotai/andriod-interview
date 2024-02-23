@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    xmlns:zh="http://schemas.android.com/apk/res-auto">
 
     <TextView
         android:id="@+id/textView"
@@ -9,4 +10,10 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:text="TextView" />
+    <com.interview.自定义View.CustomViewGroup
+        android:id="@+id/main_custom_view_id"
+        android:layout_width="100dp"
+        android:layout_height="100dp"
+        style="@style/CustomViewGroupStyle"
+        zh:layout_simple_attr_1="3"/>
 </LinearLayout>

@@ -8,10 +8,12 @@ import android.text.style.ForegroundColorSpan
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import com.example.myapplication.hotfix.patch.Demo
+import com.interview.自定义View.CustomViewGroup
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
         setContentView(R.layout.layout_main)
         findViewById<TextView>(R.id.textView).apply {
             text = SpannableString("SpannedString").apply {
@@ -23,6 +25,13 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+
+        findViewById<CustomViewGroup>(R.id.main_custom_view_id).apply {
+
+            setTheme(R.style.CustomViewGroupStyle)
+        }
+
+
 
         println(classLoader.toString())
     }

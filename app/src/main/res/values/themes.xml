@@ -2,4 +2,12 @@
 <resources>
 
     <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!--  配置一个style,用于CustomViewGroup的实现  -->
+    <style name="CustomViewGroupStyle.light" parent="Theme.MyApplication">
+        <!--  使用你在attrs中声明的style属性      -->
+        <item name="layout_simple_attr_1">2</item>
+        <!--  使用系统定义的Theme属性      -->
+        <item name="android:background">#C6F3D5</item>
+    </style>
 </resources>

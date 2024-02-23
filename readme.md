@@ -8,3 +8,8 @@
    - 源码的实现中使用Koin进行依赖注入，
      基本原理是：在Application的onCreate钩子函数调用时，调用startKoin创建ViewModel模块，
     
+# day: 2.22 回溯了day21对于koin及ViewModel梳理回滚，RecycleView的布局（LayoutManager）和缓存（Recycler）   进行了一场面试
+    面试中掌握不足的有 
+     1. ANR 的概念，检测机制，线上发生ANR如何监控；
+     2. 算法题： 根据前序遍历和后序遍历还原二叉树；
+# day 2.23 先应付完工作， 在处理下算法题，之后看自定义View

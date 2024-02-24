@@ -64,4 +64,6 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.fragment)
+    implementation(libs.lifecycle.extensions)
+    implementation(libs.koin.android.viewmodel)
 }

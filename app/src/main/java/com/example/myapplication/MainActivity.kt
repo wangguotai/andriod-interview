@@ -7,10 +7,13 @@ import android.text.SpannedString
 import android.text.style.ForegroundColorSpan
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import com.example.myapplication.hotfix.patch.Demo
+import org.koin.core.parameter.parametersOf
+import org.koin.android.viewmodel.ext.android.viewModel
 import com.interview.自定义View.CustomViewGroup
 
 class MainActivity : ComponentActivity() {
+    private val TAG = "MainActivity"
+    private val viewModel by viewModel<MainTabViewModel> {  parametersOf(TAG)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

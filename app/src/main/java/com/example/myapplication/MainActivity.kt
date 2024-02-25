@@ -13,7 +13,7 @@ import com.interview.自定义View.CustomViewGroup
 
 class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity"
-    private val viewModel by viewModel<MainTabViewModel> {  parametersOf(TAG)}
+//    private val viewModel by viewModel<MainTabViewModel> {  parametersOf(TAG)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

@@ -1,6 +1,4 @@
-package com.example.mylibrary.leetcode.二维动态规划;
-
-import java.util.Arrays;
+package com.example.mylibrary.leetcode.动态规划.p121;
 
 class Solution {
     public int uniquePathsWithObstacles(int[][] obstacleGrid) {

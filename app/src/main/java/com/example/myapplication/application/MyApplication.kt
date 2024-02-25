@@ -3,7 +3,7 @@ package com.example.myapplication.application
 import android.app.Application
 import android.content.Context
 import com.example.myapplication.hotfix.HotFix
-import org.koin.core.context.startKoin
+//import org.koin.core.context.startKoin
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader

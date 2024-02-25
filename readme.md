@@ -29,8 +29,12 @@
 # day: 2.22 回溯了day21对于koin及ViewModel梳理回滚，RecycleView的布局（LayoutManager）和缓存（Recycler）   进行了一场面试
     面试中掌握不足的有 
      1. ANR 的概念，检测机制，线上发生ANR如何监控；
-     2. 算法题： 根据前序遍历和后序遍历还原二叉树；
+     2. 算法题： 
+        - 根据前序遍历和后序遍历还原二叉树；
+        - 股票交易问题： p121、p122
+
 # day 2.23 先应付完工作， 在处理下算法题，之后看自定义View
-    自定义View 构造函数中的第三个参数
-        defStyleAttr: 首先我们构建了一个自定义style
+    自定义View 构造函数中的第三、四个参数（详见笔记）
+        defStyleAttr: 与主题相关的概念，该style定义在themes.xml中，不被系统主动调用
+        defSytleRes: 定义在styles.xml中一套属性的默认值，当attrs及defStyleAttr都没有定位到该属性时，走这里
             

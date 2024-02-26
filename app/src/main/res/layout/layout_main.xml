@@ -16,4 +16,7 @@
         android:layout_height="100dp"
         style="@style/CustomViewGroupStyle"
         zh:layout_simple_attr_1="3"/>
+    <FrameLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"/>
 </LinearLayout>

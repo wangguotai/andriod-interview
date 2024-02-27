@@ -21,7 +21,7 @@ class MyApplication : Application() {
 
 
 
-        HotFix.installPatch(this, File("${getExternalFilesDir(null)!!.absolutePath}/patch.dex"))
+//        HotFix.installPatch(this, File("${getExternalFilesDir(null)!!.absolutePath}/patch.dex"))
     }
 
     override fun onCreate() {

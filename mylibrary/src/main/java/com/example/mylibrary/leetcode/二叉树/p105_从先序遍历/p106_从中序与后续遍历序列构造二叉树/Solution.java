@@ -38,14 +38,6 @@ public class Solution {
     int preIndex; // 存储根节点的下标
     Map<Integer, Integer> inIndexes;
 
-    public static void main(String[] args) {
-        TreeNode root = new Solution().buildTree(
-                new int[]{3, 9, 20, 15, 7},
-                new int[]{9, 3, 15, 20, 7}
-        );
-        System.out.println(root);
-    }
-
     /**
      * 前序遍历第一个结点会是根节点
      * 中序遍历会将二叉树分为两个子树
@@ -76,5 +68,13 @@ public class Solution {
         root.left = helper(inLeft, rootIndex - 1);
         root.right = helper(rootIndex + 1, inRight);
         return root;
+    }
+
+    public static void main(String[] args) {
+        TreeNode root = new Solution().buildTree(
+                new int[]{3, 9, 20, 15, 7},
+                new int[]{9, 3, 15, 20, 7}
+        );
+        System.out.println(root);
     }
 }

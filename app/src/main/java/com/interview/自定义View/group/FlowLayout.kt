@@ -20,9 +20,20 @@ class FlowLayout @JvmOverloads constructor(
     val allLines by lazy {
         mutableListOf<MutableList<View>>()
     }
-    val lineHeight by lazy {
+    val lineHeights by lazy {
         mutableListOf<Int>()
     }
+
+    /**
+     * 1. 先度量孩子
+     *     - 根据LayoutParams的测量模式和父布局measureSpc + padding，获取child的measureSpec
+     *     - 将measureSpec传入child的measure方法，具体的度量在onMeasure中
+     *     - 父布局通过child的测量结果，更新自身的宽高
+     *
+     *
+     * @param widthMeasureSpec
+     * @param heightMeasureSpec
+     */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         // 先度量孩子
         val childCount = childCount
@@ -58,7 +69,7 @@ class FlowLayout @JvmOverloads constructor(
                 paddingTop + paddingBottom,
                 layoutParams.height
             )
-            childView.measure(widthMeasureSpec, heightMeasureSpec)
+            childView.measure(childWidthMeasureSpec, childHeightMeasureSpec)
 
             // 获取子view的度量宽高
             val childMeasuredWidth = childView.measuredWidth
@@ -69,6 +80,9 @@ class FlowLayout @JvmOverloads constructor(
                 // 当需要换行时将当前行的宽高进行记录
                 parentNeededHeight += lineHeightUsed
                 parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed)
+                // 记录当前的行内容及行高，
+                allLines.add(lineView)
+                lineHeights.add(lineHeightUsed)
                 // 清理上一行的数据
                 lineView.clear()
                 lineWidthUsed = 0
@@ -79,6 +93,13 @@ class FlowLayout @JvmOverloads constructor(
             // 每行都会有自己的宽高
             lineWidthUsed += childMeasuredWidth + mHorizontalSpacing
             lineHeightUsed = maxOf(childMeasuredHeight + mHorizontalSpacing, lineHeightUsed)
+            // 处理最后一行
+            if (i == childCount - 1) {
+                allLines.add(lineView)
+                lineHeights.add(lineHeightUsed)
+                parentNeededHeight += lineHeightUsed
+                parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed)
+            }
         }
         // 在度量自己，保存
         // 根据子View的度量结果，来重新度量自己ViewGroup
@@ -93,11 +114,24 @@ class FlowLayout @JvmOverloads constructor(
 
     // 布局
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
-        val curL = paddingLeft
-        val curT = paddingTop
-        for (i in 0 until childCount) {
-            val view = getChildAt(i)
+        val paddingLeftValue = paddingLeft
+        val paddingTopValue = paddingTop
+        var curL = paddingLeftValue
+        var curT = paddingTopValue
+        var lineIndex = 0
+        for (lineViews in allLines) {
+            for (view in lineViews) {
+                // 布局每一个子View的位置
+                val left = curL
+                val top = curT
+                val right = view.measuredWidth + left
+                val bottom = view.measuredHeight + top;
+                view.layout(left, top, right, bottom)
+                curL = right + mHorizontalSpacing
 
+            }
+            curT += lineHeights[lineIndex++] + mVerticalSpacing
+            curL = paddingLeftValue
         }
     }
 }

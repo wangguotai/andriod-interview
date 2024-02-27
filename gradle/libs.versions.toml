@@ -12,7 +12,7 @@ androidXFragmentAPI = "1.3.6"
 appcompat = "1.6.1"
 material = "1.11.0"
 lifecycleVersion = "2.2.0"
-koinViewModel = '1.0.2'
+koinViewModel = '2.2.2'
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }

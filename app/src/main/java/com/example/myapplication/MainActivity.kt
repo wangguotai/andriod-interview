@@ -3,12 +3,9 @@ package com.example.myapplication
 import android.graphics.Color
 import android.os.Bundle
 import android.text.SpannableString
-import android.text.SpannedString
 import android.text.style.ForegroundColorSpan
 import android.widget.TextView
 import androidx.activity.ComponentActivity
-import org.koin.core.parameter.parametersOf
-import org.koin.android.viewmodel.ext.android.viewModel
 import com.interview.自定义View.CustomViewGroup
 
 class MainActivity : ComponentActivity() {

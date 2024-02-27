@@ -2,21 +2,41 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:orientation="vertical"
     xmlns:zh="http://schemas.android.com/apk/res-auto">
 
     <TextView
         android:id="@+id/textView"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_weight="1"
         android:text="TextView" />
+
     <com.interview.自定义View.CustomViewGroup
         android:id="@+id/main_custom_view_id"
         android:layout_width="100dp"
         android:layout_height="100dp"
         style="@style/CustomViewGroupStyle"
-        zh:layout_simple_attr_1="3"/>
-    <FrameLayout
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"/>
+        zh:layout_simple_attr_1="3" />
+
+    <com.interview.自定义View.group.FlowLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="TEST1" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/purple_200"
+            android:text="TEST2" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/teal_200"
+            android:text="TEST3" />
+    </com.interview.自定义View.group.FlowLayout>
 </LinearLayout>

@@ -1,9 +1,12 @@
 package com.interview.自定义View.group
 
 import android.content.Context
+import android.content.res.Resources
 import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
+
 
 /**
  * Time: 2024/2/17
@@ -15,8 +18,8 @@ class FlowLayout @JvmOverloads constructor(
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0
 ) : ViewGroup(context, attrs, defStyleAttr) {
-    var mHorizontalSpacing = 100 // 稍后使用自定义属性提供赋值
-    var mVerticalSpacing = 40
+    var mHorizontalSpacing = dp2px(16) // 稍后使用自定义属性提供赋值
+    var mVerticalSpacing = dp2px(8)
     val allLines by lazy {
         mutableListOf<MutableList<View>>()
     }
@@ -35,7 +38,7 @@ class FlowLayout @JvmOverloads constructor(
      * @param heightMeasureSpec
      */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-        initMeasureParams();
+        clearMeasureParams();
         // 先度量孩子
         val childCount = childCount
 
@@ -43,63 +46,64 @@ class FlowLayout @JvmOverloads constructor(
         val selfWidth = MeasureSpec.getSize(widthMeasureSpec)
         val selfHeight = MeasureSpec.getSize(widthMeasureSpec)
 
-        // 流式布局的宽高
+        // measure过程中，子View要求的父ViewGroup的宽
         var parentNeededWidth = 0
+        // measure过程中，子View要求的父ViewGroup的高
         var parentNeededHeight = 0
 
-
         // 保存一行中的所有的view
-        val lineView = mutableListOf<View>()
+        var lineView = mutableListOf<View>()
         // 记录这行已经使用了多宽的size
         var lineWidthUsed = 0
-        var lineHeightUsed = 0
-        // 便利children
+        // 记录一行中的行高
+        var lineHeight = 0
+        // 遍历children
         for (i in 0 until childCount) {
             val childView = getChildAt(i)
             // 获取一个layoutParams
             val layoutParams = childView.layoutParams
-            // 将一个layoutParams转换成measureSpec
-            val childWidthMeasureSpec =
-                getChildMeasureSpec(
+            if (childView.visibility != GONE) {
+                // 将一个layoutParams转换成measureSpec
+                val childWidthMeasureSpec = getChildMeasureSpec(
                     widthMeasureSpec,
                     paddingLeft + paddingRight,
                     layoutParams.width
                 )
-            val childHeightMeasureSpec = getChildMeasureSpec(
-                heightMeasureSpec,
-                paddingTop + paddingBottom,
-                layoutParams.height
-            )
-            childView.measure(childWidthMeasureSpec, childHeightMeasureSpec)
+                val childHeightMeasureSpec = getChildMeasureSpec(
+                    heightMeasureSpec,
+                    paddingTop + paddingBottom,
+                    layoutParams.height
+                )
+                childView.measure(childWidthMeasureSpec, childHeightMeasureSpec)
+                // 获取子view的度量宽高
+                val childMeasuredWidth = childView.measuredWidth
+                val childMeasuredHeight = childView.measuredHeight
 
-            // 获取子view的度量宽高
-            val childMeasuredWidth = childView.measuredWidth
-            val childMeasuredHeight = childView.measuredHeight
-
-            // 换行逻辑
-            if(childMeasuredWidth + lineWidthUsed + mHorizontalSpacing > selfWidth) {
-                // 当需要换行时将当前行的宽高进行记录
-                parentNeededHeight += lineHeightUsed
-                parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed)
-                // 记录当前的行内容及行高，
-                allLines.add(lineView)
-                lineHeights.add(lineHeightUsed)
-                // 清理上一行的数据
-                lineView.clear()
-                lineWidthUsed = 0
-                lineHeightUsed = 0
-            }
-            // view是分行layout的，所以要记录每一行有哪些view,所以要记录每一行有哪些view，这样可以方便layout布局
-            lineView.add(childView)
-            // 每行都会有自己的宽高
-            lineWidthUsed += childMeasuredWidth + mHorizontalSpacing
-            lineHeightUsed = maxOf(childMeasuredHeight + mVerticalSpacing, lineHeightUsed)
-            // 处理最后一行
-            if (i == childCount - 1) {
-                allLines.add(lineView)
-                lineHeights.add(lineHeightUsed)
-                parentNeededHeight += lineHeightUsed
-                parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed)
+                // 换行逻辑
+                if (childMeasuredWidth + lineWidthUsed + mHorizontalSpacing > selfWidth) {
+                    // 当需要换行时将当前行的宽高进行记录
+                    parentNeededHeight += lineHeight + mVerticalSpacing
+                    parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed)
+                    // 记录当前的行内容及行高，
+                    allLines.add(lineView)
+                    lineHeights.add(lineHeight)
+                    // 清理上一行的数据
+                    lineView = mutableListOf()
+                    lineWidthUsed = 0
+                    lineHeight = 0
+                }
+                // view是分行layout的，所以要记录每一行有哪些view,所以要记录每一行有哪些view，这样可以方便layout布局
+                lineView.add(childView)
+                // 每行都会有自己的宽高
+                lineWidthUsed += childMeasuredWidth + mHorizontalSpacing
+                lineHeight = maxOf(childMeasuredHeight, lineHeight)
+                // 处理最后一行
+                if (i == childCount - 1) {
+                    allLines.add(lineView)
+                    lineHeights.add(lineHeight)
+                    parentNeededHeight += lineHeight + mVerticalSpacing
+                    parentNeededWidth = maxOf(parentNeededWidth, lineWidthUsed + mHorizontalSpacing)
+                }
             }
         }
         // 在度量自己，保存
@@ -113,7 +117,7 @@ class FlowLayout @JvmOverloads constructor(
         setMeasuredDimension(realWidth, realHeight)
     }
 
-    private fun initMeasureParams() {
+    private fun clearMeasureParams() {
         lineHeights.clear();
         allLines.clear();
     }
@@ -134,10 +138,19 @@ class FlowLayout @JvmOverloads constructor(
                 val bottom = view.measuredHeight + top;
                 view.layout(left, top, right, bottom)
                 curL = right + mHorizontalSpacing
-
             }
             curT += lineHeights[lineIndex++] + mVerticalSpacing
             curL = paddingLeftValue
+        }
+    }
+
+    companion object {
+        fun dp2px(dp: Int): Int {
+            return TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                dp.toFloat(),
+                Resources.getSystem().displayMetrics
+            ).toInt()
         }
     }
 }

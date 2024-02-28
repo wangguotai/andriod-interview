@@ -45,3 +45,17 @@
     1. 二叉树重建，
         1. 根据中序遍历和后序遍历
         2. 根据中序遍历和先序遍历 
+
+# day 2.28
+
+    - leetcode 哈希-异位词分组
+    - 自定义viewGroup全流程完成
+        总结：对于ViewGroup考虑 onMeasure + onLayout， 
+            onMeasure中：大部分的场景下都是需要先通过度量孩子的宽高之后获取parent的宽高；【child的度量】
+                        在确定孩子宽高时，通过parent的measureSpec、padding和child的layoutParams确定child的measureSpec
+                            父布局EXACTLY、UNSPECIFIED、AT_MOST + 子布局的WRAP_CONTENT、MATCH_PARENT、>0的dp =》 确定
+                        父布局宽高确定 【父布局的度量】
+                            通过需求场景确定，如在流式布局中通过child的宽度+间距 累加 与parent的宽度进行比较 确定每一行的元素数目，为onLayout做准备；
+                            高度通过child的摆放行数 + 间距 确定；
+            onLayout中：
+                    对children按照measure中写入的每一行的顺序，整理 left、top、right、bottom 调用child的layout方法完成排部。

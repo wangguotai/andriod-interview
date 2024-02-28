@@ -92,7 +92,7 @@ class FlowLayout @JvmOverloads constructor(
             lineView.add(childView)
             // 每行都会有自己的宽高
             lineWidthUsed += childMeasuredWidth + mHorizontalSpacing
-            lineHeightUsed = maxOf(childMeasuredHeight + mHorizontalSpacing, lineHeightUsed)
+            lineHeightUsed = maxOf(childMeasuredHeight + mVerticalSpacing, lineHeightUsed)
             // 处理最后一行
             if (i == childCount - 1) {
                 allLines.add(lineView)

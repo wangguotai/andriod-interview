@@ -19,12 +19,14 @@
         zh:layout_simple_attr_1="3" />
 
     <com.interview.自定义View.group.FlowLayout
+        android:background="#EADFF6"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:textColor="@color/black"
             android:text="TEST1" />
 
         <TextView

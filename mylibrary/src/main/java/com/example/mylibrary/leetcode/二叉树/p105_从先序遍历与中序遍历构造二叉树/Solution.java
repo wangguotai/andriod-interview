@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.二叉树.p105_从先序遍历.p106_从中序与后续遍历序列构造二叉树;
+package com.example.mylibrary.leetcode.二叉树.p105_从先序遍历与中序遍历构造二叉树;
 
 import com.example.mylibrary.leetcode.二叉树.TreeNode;
 

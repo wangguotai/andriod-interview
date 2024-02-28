@@ -35,6 +35,7 @@ class FlowLayout @JvmOverloads constructor(
      * @param heightMeasureSpec
      */
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        initMeasureParams();
         // 先度量孩子
         val childCount = childCount
 
@@ -110,6 +111,11 @@ class FlowLayout @JvmOverloads constructor(
         val realWidth = if (widthMode == MeasureSpec.EXACTLY) selfWidth else parentNeededWidth
         val realHeight = if (heightMode == MeasureSpec.EXACTLY) selfHeight else parentNeededHeight
         setMeasuredDimension(realWidth, realHeight)
+    }
+
+    private fun initMeasureParams() {
+        lineHeights.clear();
+        allLines.clear();
     }
 
     // 布局

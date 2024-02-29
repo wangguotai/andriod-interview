@@ -48,12 +48,17 @@ public class Main {
         return arr;
     }
 
+    public static int[] quickSort(int[] arr) {
+
+        return quickSort(arr, 0, arr.length - 1);
+    }
+
     private static int partition(int[] arr, int left, int right) {
         // 设定基准值 (pivot)
         int pivot = left;
         int index = pivot + 1;
-        for (int i = index; i < right; i++) {
-            if (arr[i] < arr[pivot]) {
+        for (int i = index; i <= right; i++) {
+            if (arr[i] <= arr[pivot]) {
                 swap(arr, i, index);
                 index++;
             }
@@ -158,6 +163,11 @@ public class Main {
 
     public static void main(String[] args) {
         System.out.println(Arrays.toString(bubbleSort(
+                new int[]{
+                        2, 1, 5, 7, 9, 1, 4, 2, 3
+                }
+        )));
+        System.out.println(Arrays.toString(quickSort(
                 new int[]{
                         2, 1, 5, 7, 9, 1, 4, 2, 3
                 }

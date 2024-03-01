@@ -13,6 +13,7 @@ appcompat = "1.6.1"
 material = "1.11.0"
 lifecycleVersion = "2.2.0"
 koinViewModel = '2.2.2'
+constraintlayout = "2.1.4"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -33,7 +34,8 @@ androidx-fragment = { group="androidx.fragment", name = "fragment", version.ref 
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 lifecycle-extensions = {group='androidx.lifecycle', name='lifecycle-extensions', version.ref= 'lifecycleVersion' }
-koin-android-viewmodel = {group='org.koin', name='koin-android-viewmodel', version.ref = 'koinViewModel'}
+koin-android-viewmodel = { group = 'org.koin', name = 'koin-android-viewmodel', version.ref = 'koinViewModel' }
+constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 jetbrainsKotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

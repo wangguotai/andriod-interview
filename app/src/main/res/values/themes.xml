@@ -2,7 +2,7 @@
 <resources>
 
     <style name="Theme.MyApplication" parent="android:Theme.Material.Light.NoActionBar" />
-
+    <style name="Theme.MyApplication.AppCompat" parent="Theme.AppCompat.Light.NoActionBar" />
     <!--  配置一个style,用于CustomViewGroup的实现  -->
     <style name="CustomViewGroupStyle.light" parent="Theme.MyApplication">
         <!--  使用你在attrs中声明的style属性      -->

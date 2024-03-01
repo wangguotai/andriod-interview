@@ -1,7 +1,8 @@
-package com.example.myapplication
+package com.example.myapplication.activity
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import com.example.myapplication.R
 
 class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity"

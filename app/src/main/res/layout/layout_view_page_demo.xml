@@ -13,7 +13,7 @@
         android:layout_gravity="center"
         android:layout_marginStart="60dp"
         android:layout_marginEnd="60dp"
-        android:clipChildren="false"></com.example.myapplication.viewPager.MyViewPager>
+        android:clipChildren="false" />
 
     <RadioGroup
         android:id="@+id/radio_group"

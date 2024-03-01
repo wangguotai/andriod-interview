@@ -20,6 +20,7 @@ class MyViewPagerAdapter(val mItems: List<Int>, val mContext: Context) : PagerAd
 
     override fun instantiateItem(container: ViewGroup, position: Int): Any {
         val realPos = position % mItems.size
+//        val view = LayoutInflater.from(mContext).inflate(R.layout.linear_item, null)
         val view = LayoutInflater.from(mContext).inflate(R.layout.linear_item, container, false)
         view.findViewById<TextView>(R.id.tv).run {
             val provideText = "$position - data ${mItems[realPos]}"

@@ -15,6 +15,7 @@ class MyViewPager @JvmOverloads constructor(
         val paddingVertical = paddingTop + paddingBottom
         for (index in 0 until childCount) {
             getChildAt(index).apply {
+                val layoutParams = layoutParams
                 val childMeasureWithSpec = getChildMeasureSpec(
                     widthMeasureSpec, paddingHorizontal, layoutParams.width
                 )

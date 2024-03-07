@@ -1,5 +1,8 @@
 package com.example.mylibrary.leetcode.链表;
 
+import java.util.LinkedList;
+import java.util.List;
+
 public class ListNode {
     public int val;
     public ListNode next;
@@ -25,5 +28,14 @@ public class ListNode {
             curr = curr.next;
         }
         return head.next;
+    }
+
+    public static List getList(ListNode node) {
+        List<Integer> ans = new LinkedList<>();
+        while (node != null) {
+            ans.add(node.val);
+            node = node.next;
+        }
+        return ans;
     }
 }

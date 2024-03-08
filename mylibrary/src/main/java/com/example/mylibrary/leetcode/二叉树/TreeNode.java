@@ -22,10 +22,10 @@ public class TreeNode {
         this.right = right;
     }
 
-    public static TreeNode createTreeNode(int... levelOrder) throws IllegalAccessException {
-        if (levelOrder == null || levelOrder.length == 0) {
-            throw new IllegalAccessException("参数不能为空");
-        }
+    public static TreeNode createTreeNode(int... levelOrder) {
+//        if (levelOrder == null || levelOrder.length == 0) {
+//            throw new IllegalAccessException("参数不能为空");
+//        }
         TreeNode root = new TreeNode(levelOrder[0]);
         Queue<TreeNode> queue = new LinkedList<>();
         queue.offer(root);

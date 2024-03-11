@@ -23,9 +23,6 @@ public class TreeNode {
     }
 
     public static TreeNode createTreeNode(int... levelOrder) {
-//        if (levelOrder == null || levelOrder.length == 0) {
-//            throw new IllegalAccessException("参数不能为空");
-//        }
         TreeNode root = new TreeNode(levelOrder[0]);
         Queue<TreeNode> queue = new LinkedList<>();
         queue.offer(root);
@@ -39,6 +36,48 @@ public class TreeNode {
             i++;
             if (i < levelOrder.length && levelOrder[i] != -1) {
                 current.right = new TreeNode(levelOrder[i]);
+                queue.offer(current.right);
+            }
+            i++;
+        }
+        return root;
+    }
+
+    public static TreeNode createTreeNode(TreeNode p, TreeNode q, int... levelOrder) {
+        TreeNode root;
+        if (levelOrder[0] == p.val) {
+            root = p;
+        } else if (levelOrder[0] == q.val) {
+            root = q;
+        } else {
+            root = new TreeNode(levelOrder[0]);
+        }
+        Queue<TreeNode> queue = new LinkedList<>();
+        queue.offer(root);
+        int i = 1;
+        while (!queue.isEmpty() && i < levelOrder.length) {
+            TreeNode current = queue.poll();
+            if (levelOrder[i] != -1) {
+                if (levelOrder[i] == p.val) {
+                    current.left = p;
+                } else if (levelOrder[i] == q.val) {
+                    current.left = q;
+                } else {
+                    current.left = new TreeNode(levelOrder[i]);
+                }
+                queue.offer(current.left);
+            }
+            i++;
+            if (i < levelOrder.length && levelOrder[i] != -1) {
+//                current.right = new TreeNode(levelOrder[i]);
+                if (levelOrder[i] == p.val) {
+                    current.right = p;
+                }
+                if (levelOrder[i] == q.val) {
+                    current.right = q;
+                } else {
+                    current.right = new TreeNode(levelOrder[i]);
+                }
                 queue.offer(current.right);
             }
             i++;

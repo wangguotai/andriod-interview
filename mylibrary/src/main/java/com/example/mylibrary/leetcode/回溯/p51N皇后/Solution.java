@@ -2,30 +2,18 @@ package com.example.mylibrary.leetcode.回溯.p51N皇后;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Set;
 
-/**
- * Time: 2024/3/14
- * Author: wgt
- * Description:
- */
 public class Solution {
-    private List<List<String>> ans = new LinkedList<>();
-    private char[][] chessboard;
-    private boolean[][] marked;
-    private int n;
-    private int[][] d = new int[][]{
-            new int[]{2, 1},
-            new int[]{2, -1},
-            new int[]{-2, 1},
-            new int[]{-2, -1},
-
-            new int[]{1, -2},
-            new int[]{-1, -2},
-            new int[]{1, 2},
-            new int[]{-1, 2},
-    };
+    List<List<String>> ans = new LinkedList<>();
+    int[] queens;
+    int n;
+    Set<Integer> columns = new HashSet<>();
+    Set<Integer> diagonals1 = new HashSet<>();
+    Set<Integer> diagonals2 = new HashSet<>();
 
     public static void main(String[] args) {
         System.out.println(
@@ -34,82 +22,46 @@ public class Solution {
     }
 
     public List<List<String>> solveNQueens(int n) {
-        chessboard = new char[n][n];
-        for (int i = 0; i < n; i++) {
-            Arrays.fill(chessboard[i], '.');
-        }
-        marked = new boolean[n][n];
+        this.queens = new int[n];
         this.n = n;
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                backTrace(0, i, j);
-            }
-        }
+        Arrays.fill(queens, -1);
+        backTrack(0);
         return ans;
     }
 
-    private void backTrace(int index, int i, int j) {
-        if (index == n + 1) {
-            ans.add(getChessboard());
-            return;
+    private void backTrack(int row) {
+        if (row == n) {
+            ans.add(chessBoardToList());
         }
-        if (isOutOfBoard(i, j)) {
-            return;
-        }
-//        if(!marked[i][j]){
-
-//            for (int k = 0; k < d.length; k++) {
-//                int x = i + d[k][0];
-//                int y = j + d[k][1];
-//
-//            }
-        for (int k = 0; k < n; k++) {
-            for (int l = 0; l < n; l++) {
-                if (!marked[k][l]) {
-                    setMarked(k, l, true);
-                    chessboard[k][l] = 'Q';
-                    backTrace(index + 1, k, l);
-                    chessboard[k][l] = '.';
-                    setMarked(k, l, false);
-                }
+        for (int i = 0; i < n; i++) {
+            if (!columns.contains((i)) && !diagonals1.contains(row + i) && !diagonals2.contains(row - i)) {
+                columns.add(i);
+                diagonals1.add(row + i);
+                diagonals2.add(row - i);
+                queens[row] = i;
+                backTrack(row + 1);
+                columns.remove(i);
+                diagonals1.remove(row + i);
+                diagonals2.remove(row - i);
+                queens[row] = -1;
             }
         }
-
-//        }
     }
 
-    private boolean isOutOfBoard(int r, int c) {
-        return r < 0 || r >= n || c < 0 || c >= n;
-    }
-
-    private List<String> getChessboard() {
+    private List<String> chessBoardToList() {
         List<String> result = new ArrayList<>(n);
+
         for (int i = 0; i < n; i++) {
             StringBuilder sb = new StringBuilder();
             for (int j = 0; j < n; j++) {
-                sb.append(chessboard[i][j]);
+                if (queens[i] == j) {
+                    sb.append('Q');
+                } else {
+                    sb.append('.');
+                }
             }
             result.add(sb.toString());
         }
         return result;
-    }
-
-    private void setMarked(int r, int c, boolean value) {
-        backTraceForMark(r, c, -1, -1, value);
-        backTraceForMark(r, c, -1, 1, value);
-        backTraceForMark(r, c, 1, 1, value);
-        backTraceForMark(r, c, 1, -1, value);
-        for (int i = 0; i < n; i++) {
-            marked[r][i] = value;
-            marked[i][c] = value;
-        }
-    }
-
-    private void backTraceForMark(int i, int j, int dx, int dy, boolean value) {
-        if (isOutOfBoard(i, j)) {
-            return;
-        }
-        marked[i][j] = value;
-        backTraceForMark(i + dx, i + dy, dx, dy, value);
     }
 }

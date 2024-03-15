@@ -10,8 +10,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.viewpager.widget.ViewPager
 import androidx.viewpager.widget.ViewPager.OnPageChangeListener
 import com.example.myapplication.R
-import com.example.myapplication.viewPager.MyViewPagerAdapter
-import com.example.myapplication.viewPager.PageTransform
+import com.example.myapplication.widget.viewPager.MyViewPagerAdapter
+import com.example.myapplication.widget.viewPager.PageTransform
 import com.interview.自定义View.group.FlowLayout
 import java.lang.ref.WeakReference
 import java.util.Timer

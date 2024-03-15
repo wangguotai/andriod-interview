@@ -1,4 +1,4 @@
-package com.example.myapplication.viewPager
+package com.example.myapplication.widget.viewPager
 
 import android.view.View
 import androidx.viewpager.widget.ViewPager

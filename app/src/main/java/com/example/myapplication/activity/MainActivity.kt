@@ -6,7 +6,8 @@ import com.example.myapplication.R
 
 class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity"
-//    private val viewModel by viewModel<MainTabViewModel> {  parametersOf(TAG)}
+
+    //    private val viewModel by viewModel<MainTabViewModel> {  parametersOf(TAG)}
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 

@@ -32,7 +32,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 adapter = SimpleAdapter(list)
                 itemAnimator = null
-                addItemDecoration(MyItemDecoration())
+                addItemDecoration(MyItemDecoration(this@MainActivity))
             })
         }
     }

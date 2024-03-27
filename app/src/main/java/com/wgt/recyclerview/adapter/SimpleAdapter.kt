@@ -18,6 +18,13 @@ class SimpleAdapter(private val mData: MutableList<String>) :
 
     private val drawable: Drawable = ActivityHelper.generatorItemDrawable()
 
+    /**
+     * Is group header 每5个item我们给一个group header的标签
+     *
+     * @param position
+     * @return
+     */
+    fun isGroupHeader(position: Int): Boolean = position % 5 == 0
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): SimpleViewHolder {
         // 获取View 并放置在ViewHolder中
         return SimpleViewHolder(TextView(parent.context).apply {

@@ -21,6 +21,16 @@
         android:theme="@style/Theme.MyApplication"
         tools:targetApi="33">
         <activity
+            android:name="com.wgt.recyclerview.MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.MyApplication.AppCompat">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <activity
             android:name="com.wgt.draw_text.MainActivity"
             android:exported="true"
             android:theme="@style/Theme.MyApplication.AppCompat">
@@ -34,11 +44,13 @@
             android:name=".activity.Main2Activity"
             android:exported="true"
             android:theme="@style/Theme.MyApplication.AppCompat">
-            <!--            <intent-filter>-->
-            <!--                <action android:name="android.intent.action.MAIN" />-->
 
-            <!--                <category android:name="android.intent.category.LAUNCHER" />-->
-            <!--            </intent-filter>-->
+            <!-- <intent-filter> -->
+            <!-- <action android:name="android.intent.action.MAIN" /> -->
+
+
+            <!-- <category android:name="android.intent.category.LAUNCHER" /> -->
+            <!-- </intent-filter> -->
         </activity>
         <activity
             android:name=".activity.MainActivity"

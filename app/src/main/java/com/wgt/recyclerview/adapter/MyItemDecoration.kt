@@ -24,10 +24,10 @@ class MyItemDecoration(context: Context) : ItemDecoration() {
     override fun onDraw(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
         super.onDraw(c, parent, state)
         // 2. 绘制头部的view  onDraw不会遮挡 item， onDrawOver会遮挡，这是由 canvas绘制的顺序决定的 一个在前一个在最后
-        if (parent.adapter is SimpleAdapter) {
-            val childCount = parent.childCount
-            for (i in 0 until childCount)
-        }
+//        if (parent.adapter is SimpleAdapter) {
+//            val childCount = parent.childCount
+//            for (i in 0 until childCount)
+//        }
     }
 
     override fun getItemOffsets(

@@ -22,12 +22,14 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = ViewGroup.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.WRAP_CONTENT
-                )
+                ).apply {
+                    setPadding(0, ActivityHelper.dpToPx(80f).toInt(), 0, 0)
+                }
                 layoutManager = LinearLayoutManager(this@MainActivity).apply {
                     // 关闭预取
                     isItemPrefetchEnabled = false
                 }
-                val list = ActivityHelper.getData(10) {
+                val list = ActivityHelper.getData(30) {
                     "Item $it"
                 }
                 adapter = SimpleAdapter(list)

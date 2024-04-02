@@ -11,6 +11,20 @@ import java.util.concurrent.locks.LockSupport
  * Description: 基于ReferenceQueue的原理构建一个LeakHelper的简易Demo模型 用于理解解决面试问题
  */
 class LeakHelperDemo {
+    interface GCObserver {
+        fun onGC()
+    }
+
+    interface ActivityLifeCycleOwner {
+        fun register(listener: LeakLifecycleListener)
+        fun updateLifecycleState(state: LifecycleState, referent: WeakReference<Activity>)
+    }
+
+    interface LeakLifecycleListener {
+        fun onStateChanged()
+        fun onDestroy(referent: WeakReference<Activity>)
+    }
+
     val activity = Activity(ActivityLifeCycleOwnerImpl)
 
     class Activity(private val lifeCycleManager: ActivityLifeCycleOwner) {
@@ -25,15 +39,7 @@ class LeakHelperDemo {
         DESTROYED,
     }
 
-    interface ActivityLifeCycleOwner {
-        fun register(listener: LeakLifecycleListener)
-        fun updateLifecycleState(state: LifecycleState, referent: WeakReference<Activity>)
-    }
 
-    interface LeakLifecycleListener {
-        fun onStateChanged()
-        fun onDestroy(referent: WeakReference<Activity>)
-    }
 
     object ActivityLifeCycleOwnerImpl : ActivityLifeCycleOwner {
         private val listeners = mutableListOf<LeakLifecycleListener>()
@@ -54,9 +60,7 @@ class LeakHelperDemo {
 
     }
 
-    interface GCObserver {
-        fun onGC()
-    }
+
 
     // 监控GC是否发生
     object GCMonitorObserveOwner {
@@ -159,7 +163,7 @@ fun main() {
     val leakHelper = LeakHelperDemo.LeakHelper() // 改成单例的实现即可
     leakHelper.install()
     demo!!.activity.onDestroy()
-    demo = null
+//    demo = null
     System.gc()
     println("After GC")
 //    Thread.sleep(4000)

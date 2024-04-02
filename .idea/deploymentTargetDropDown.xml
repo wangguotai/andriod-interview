@@ -10,12 +10,12 @@
               <deviceKey>
                 <Key>
                   <type value="VIRTUAL_DEVICE_PATH" />
-                  <value value="$USER_HOME$/.android/avd/New_Device_3_API_33.avd" />
+                  <value value="$USER_HOME$/.android/avd/Medium_Phone_API_34.avd" />
                 </Key>
               </deviceKey>
             </Target>
           </targetSelectedWithDropDown>
-          <timeTargetWasSelectedWithDropDown value="2024-03-27T12:22:36.530262Z" />
+          <timeTargetWasSelectedWithDropDown value="2024-04-01T09:14:52.128367Z" />
         </State>
       </entry>
       <entry key="scroll-event-demo">

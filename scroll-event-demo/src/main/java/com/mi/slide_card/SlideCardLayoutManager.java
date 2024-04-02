@@ -1,11 +1,11 @@
-package com.mi.scroll_event_demo.slide_card;
+package com.mi.slide_card;
 
 import android.view.View;
 import android.view.ViewGroup;
 
 import androidx.recyclerview.widget.RecyclerView;
 
-import com.mi.scroll_event_demo.slide_card.config.CardConfig;
+import com.mi.slide_card.config.CardConfig;
 
 public class SlideCardLayoutManager extends RecyclerView.LayoutManager {
     @Override

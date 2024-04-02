@@ -1,4 +1,4 @@
-package com.mi.scroll_event_demo.slide_card.config;
+package com.mi.slide_card.config;
 
 import android.content.Context;
 import android.util.TypedValue;

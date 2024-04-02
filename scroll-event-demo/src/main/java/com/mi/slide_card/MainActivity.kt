@@ -9,6 +9,10 @@ class MainActivity : BaseActivity<ActivityMainBinding>() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        binding.rv.apply {
+            layoutManager = SlideCardLayoutManager()
+
+        }
 
     }
 

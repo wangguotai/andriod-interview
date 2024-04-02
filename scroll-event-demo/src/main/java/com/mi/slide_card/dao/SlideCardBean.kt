@@ -1,21 +1,6 @@
 package com.mi.slide_card.dao
 
 data class SlideCardBean(var postition: Int, var url: String, var name: String) {
-    fun setPostition(postition: Int): SlideCardBean {
-        this.postition = postition
-        return this
-    }
-
-    fun setUrl(url: String): SlideCardBean {
-        this.url = url
-        return this
-    }
-
-    fun setName(name: String): SlideCardBean {
-        this.name = name
-        return this
-    }
-
     companion object {
         fun initDatas(): List<SlideCardBean> {
             val datas: MutableList<SlideCardBean> = ArrayList()

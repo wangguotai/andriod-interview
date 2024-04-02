@@ -17,6 +17,7 @@ constraintlayout = "2.1.4"
 swiperefreshlayout = "1.1.0"
 viewpager = "1.1.0-alpha01"
 recyclerview = "1.1.0"
+glide = "4.12.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -33,15 +34,19 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
-androidx-fragment = { group="androidx.fragment", name = "fragment", version.ref = "androidXFragmentAPI" }
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "androidXFragmentAPI" }
 androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
-lifecycle-extensions = {group='androidx.lifecycle', name='lifecycle-extensions', version.ref= 'lifecycleVersion' }
+lifecycle-extensions = { group = 'androidx.lifecycle', name = 'lifecycle-extensions', version.ref = 'lifecycleVersion' }
 koin-android-viewmodel = { group = 'org.koin', name = 'koin-android-viewmodel', version.ref = 'koinViewModel' }
 constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 androidx-swiperefreshlayout = { group = "androidx.swiperefreshlayout", name = "swiperefreshlayout", version.ref = "swiperefreshlayout" }
 androidx-viewpager = { group = "androidx.viewpager", name = "viewpager", version.ref = "viewpager" }
 androidx-recyclerview = { group = "androidx.recyclerview", name = "recyclerview", version.ref = "recyclerview" }
+
+com-github-bumptech-glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "glide" }
+com-github-bumptech-glide-compiler = { group = "com.github.bumptech.glide", name = "compiler", version.ref = "glide" }
+
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 jetbrainsKotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

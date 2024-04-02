@@ -72,6 +72,9 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.constraintlayout)
+    implementation(libs.com.github.bumptech.glide)
+    annotationProcessor(libs.com.github.bumptech.glide.compiler)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

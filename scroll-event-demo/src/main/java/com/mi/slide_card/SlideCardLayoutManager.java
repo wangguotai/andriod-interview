@@ -33,7 +33,7 @@ public class SlideCardLayoutManager extends RecyclerView.LayoutManager {
         if (itemCount < CardConfig.MAX_SHOW_COUNT) {
             bottomPosition = 0;
         } else {
-            bottomPosition = getItemCount() - CardConfig.MAX_SHOW_COUNT;
+            bottomPosition = itemCount - CardConfig.MAX_SHOW_COUNT;
         }
         // 2. 复用 ViewHolder
         for (int i = bottomPosition; i < itemCount; i++) {
@@ -47,6 +47,20 @@ public class SlideCardLayoutManager extends RecyclerView.LayoutManager {
             int horizontalSpan = (parentWidth - getDecoratedMeasuredWidth(view)) / 2;
             int verticalSpan = (parentHeight - getDecoratedMeasuredHeight(view)) / 2;
             layoutDecoratedWithMargins(view, horizontalSpan, verticalSpan, parentWidth - horizontalSpan, parentHeight - verticalSpan);
+            int level = itemCount - i - 1;
+            if (level > 0) {
+                if (level < CardConfig.MAX_SHOW_COUNT - 1) {
+                    view.setTranslationY(CardConfig.TRANS_Y_GAP * level);
+                    view.setScaleX(1 - CardConfig.SCALE_GAP * level);
+                    view.setScaleY(1 - CardConfig.SCALE_GAP * level);
+                } else {
+                    // 最下面的那个View 与 前一个View布局一样
+                    view.setTranslationY(CardConfig.TRANS_Y_GAP * (level - 1));
+                    view.setScaleX(1 - CardConfig.SCALE_GAP * (level - 1));
+                    view.setScaleY(1 - CardConfig.SCALE_GAP * (level - 1));
+                }
+            }
+
 
         }
 

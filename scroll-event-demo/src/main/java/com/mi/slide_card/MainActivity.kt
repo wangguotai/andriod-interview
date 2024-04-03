@@ -10,6 +10,7 @@ import com.mi.scroll_event_demo.databinding.ActivityMainBinding
 import com.mi.slide_card.adapter.UniversalAdapter
 import com.mi.slide_card.adapter.ViewHolder
 import com.mi.slide_card.dao.SlideCardBean
+import com.mi.slide_card.widget.SlideCallback
 
 
 class MainActivity : BaseActivity<ActivityMainBinding>() {
@@ -40,7 +41,10 @@ class MainActivity : BaseActivity<ActivityMainBinding>() {
         }
         val slideCallback = SlideCallback(binding.rv, mAdapter, mData)
         val itemTouchHelper = ItemTouchHelper(slideCallback)
-        itemTouchHelper.attachToRecyclerView(binding.rv)
+//        itemTouchHelper.attachToRecyclerView(binding.rv)
+//        val slideCallback = Slid eCallback(binding.rv, mAdapter, mData)
+//        val itemTouchHelper = ItemTouchHelper(slideCallback)
+//        itemTouchHelper.attachToRecyclerView(binding.rv)
 
     }
 

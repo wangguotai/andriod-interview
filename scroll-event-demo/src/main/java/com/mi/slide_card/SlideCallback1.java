@@ -13,14 +13,14 @@ import com.mi.slide_card.dao.SlideCardBean;
 
 import java.util.List;
 
-public class SlideCallback extends ItemTouchHelper.SimpleCallback {
+public class SlideCallback1 extends ItemTouchHelper.SimpleCallback {
 
     private RecyclerView mRv;
     private UniversalAdapter<SlideCardBean> adapter;
     private List<SlideCardBean> mDatas;
 
-    public SlideCallback(RecyclerView mRv,
-                         UniversalAdapter<SlideCardBean> adapter, List<SlideCardBean> mDatas) {
+    public SlideCallback1(RecyclerView mRv,
+                          UniversalAdapter<SlideCardBean> adapter, List<SlideCardBean> mDatas) {
         super(0, 15);
         this.mRv = mRv;
         this.adapter = adapter;

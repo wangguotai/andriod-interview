@@ -8,6 +8,8 @@ import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.RecyclerView;
 import androidx.recyclerview.widget.RecyclerView.Adapter;
 
+import com.mi.slide_card.config.CardConfig;
+
 import java.util.List;
 
 public class SlideCallback<A extends Adapter<?>, D> extends ItemTouchHelper.SimpleCallback {
@@ -41,7 +43,7 @@ public class SlideCallback<A extends Adapter<?>, D> extends ItemTouchHelper.Simp
     @Override
     public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
         D removedData = mData.remove(viewHolder.getLayoutPosition());
-        mData.add(removedData);
+        mData.add(0, removedData);
         mAdapter.notifyDataSetChanged();
     }
 
@@ -53,11 +55,23 @@ public class SlideCallback<A extends Adapter<?>, D> extends ItemTouchHelper.Simp
         double fraction = Math.min(distance / maxDistance, 1);
 
         // 显示的个数为 4个
-        int itemCount = recyclerView.getChildCount();
-        for (int i = 0; i < itemCount; i++) {
+        int childCount = recyclerView.getChildCount();
+        for (int i = 0; i < childCount; i++) {
             View view = recyclerView.getChildAt(i);
-            int level = itemCount - i - 1;
-
+            int level = childCount - i - 1;
+            if (level > 0) {
+                if (level < CardConfig.MAX_SHOW_COUNT - 1) {
+                    view.setTranslationY((float) (CardConfig.TRANS_Y_GAP * level - fraction * CardConfig.TRANS_Y_GAP));
+                    float scaleFactor = (float) (1 - CardConfig.SCALE_GAP * level + fraction * CardConfig.SCALE_GAP);
+                    view.setScaleX(scaleFactor);
+                    view.setScaleY(scaleFactor);
+                }
+            }
         }
+    }
+
+    @Override
+    public long getAnimationDuration(@NonNull RecyclerView recyclerView, int animationType, float animateDx, float animateDy) {
+        return super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy);
     }
 }

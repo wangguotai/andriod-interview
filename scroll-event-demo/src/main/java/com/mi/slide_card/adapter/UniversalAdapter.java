@@ -1,6 +1,7 @@
 package com.mi.slide_card.adapter;
 
 import android.content.Context;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -61,6 +62,7 @@ public abstract class UniversalAdapter<T> extends RecyclerView.Adapter<ViewHolde
         if (this.isEnabled(viewType)) {
             viewHolder.itemView.setOnClickListener(new OnClickListener() {
                 public void onClick(View v) {
+                    Log.e("UniversalAdapter", " onClick" + viewHolder.getLayoutPosition());
                     if (UniversalAdapter.this.mOnItemClickListener != null) {
                         int position = UniversalAdapter.this.getPosition(viewHolder);
                         UniversalAdapter.this.mOnItemClickListener.onItemClick(parent, v, UniversalAdapter.this.mDatas.get(position), position);
@@ -70,6 +72,8 @@ public abstract class UniversalAdapter<T> extends RecyclerView.Adapter<ViewHolde
             });
             viewHolder.itemView.setOnLongClickListener(new OnLongClickListener() {
                 public boolean onLongClick(View v) {
+                    Log.e("UniversalAdapter", " onClick" + viewHolder.getLayoutPosition());
+
                     if (UniversalAdapter.this.mOnItemClickListener != null) {
                         int position = UniversalAdapter.this.getPosition(viewHolder);
                         return UniversalAdapter.this.mOnItemClickListener.onItemLongClick(parent, v, UniversalAdapter.this.mDatas.get(position), position);

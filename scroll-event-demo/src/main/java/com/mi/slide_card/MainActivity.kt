@@ -41,10 +41,7 @@ class MainActivity : BaseActivity<ActivityMainBinding>() {
         }
         val slideCallback = SlideCallback(binding.rv, mAdapter, mData)
         val itemTouchHelper = ItemTouchHelper(slideCallback)
-//        itemTouchHelper.attachToRecyclerView(binding.rv)
-//        val slideCallback = Slid eCallback(binding.rv, mAdapter, mData)
-//        val itemTouchHelper = ItemTouchHelper(slideCallback)
-//        itemTouchHelper.attachToRecyclerView(binding.rv)
+        itemTouchHelper.attachToRecyclerView(binding.rv)
 
     }
 

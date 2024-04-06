@@ -2,7 +2,7 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
 }
-
+println("Build login module")
 android {
     namespace = "com.example.login"
     compileSdk = 34

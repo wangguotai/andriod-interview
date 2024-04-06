@@ -1,14 +1,19 @@
+//apply(from = "../config.gradle.kts")
+apply(from = "../derry.gradle")
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
 }
-
+println("build xshell module")
+println(extra["appID"])
 android {
-    namespace = "com.example.xshell"
-    compileSdk = 34
+    namespace = (extra["appID"] as Map<String, String>)["app"]
+//    namespace = "com.example.xshell"
+    compileSdk = (extra["androidID"] as Map<*, *>)["compileSdkVersion"] as Int?
 
     defaultConfig {
-        applicationId = "com.example.xshell"
+        applicationId = (extra["appID"] as Map<String, String>)["app"]
+//        applicationId = "com.example.xshell"
         minSdk = 24
         targetSdk = 34
         versionCode = 1

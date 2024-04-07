@@ -1,18 +1,23 @@
-//apply(from = "../config.gradle.kts")
-apply(from = "../derry.gradle")
+apply(from = "config.gradle")
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
 }
 println("build xshell module")
-println(extra["appID"])
+
+// 从配置文件中获取全局的配置信息
+val appID: Map<String, String> by extra
+val androidID: Map<String, String> by extra
+val url: Map<String, String> by ext
+val isRelease: Boolean by ext
+
 android {
-    namespace = (extra["appID"] as Map<String, String>)["app"]
+    namespace = appID["app"].toString()
 //    namespace = "com.example.xshell"
-    compileSdk = (extra["androidID"] as Map<*, *>)["compileSdkVersion"] as Int?
+    compileSdk = (extra["androidID"] as Map<*, *>)["compileSdkVersion"] as Int
 
     defaultConfig {
-        applicationId = (extra["appID"] as Map<String, String>)["app"]
+        applicationId = (extra["appID"] as Map<*, *>)["app"].toString()
 //        applicationId = "com.example.xshell"
         minSdk = 24
         targetSdk = 34
@@ -22,8 +27,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    buildFeatures {
+        buildConfig = true
+    }
     buildTypes {
+        debug {
+            buildConfigField("String", "debug", "\"${url["debug"]}\"")
+            buildConfigField("Boolean", "isRelease", "$isRelease")
+        }
         release {
+            buildConfigField("String", "release", "\"${url["release"]}\"")
+
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -45,6 +59,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
+    implementation(libs.constraintlayout)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

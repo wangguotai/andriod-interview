@@ -37,7 +37,7 @@ android {
         }
         release {
             buildConfigField("String", "release", "\"${url["release"]}\"")
-
+            buildConfigField("Boolean", "isRelease", "$isRelease")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

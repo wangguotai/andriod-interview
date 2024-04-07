@@ -5,7 +5,7 @@ ext {
 
     // 现在 Gradle
     // 正式环境 和 测试环境
-    isRelease = false
+    isRelease = true
 
     // 正式环境 和 测试环境 服务器 URL 配置
     url = [

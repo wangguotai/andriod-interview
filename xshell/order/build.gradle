@@ -1,7 +1,12 @@
-plugins {
-    alias(libs.plugins.androidApplication)
-    alias(libs.plugins.jetbrainsKotlinAndroid)
+buildscript {
+    apply from: "../config.gradle"
 }
+if (isRelease) { // 如果是发布版本时，各个模块都不能独立运行
+    apply plugin: 'com.android.library' // 正式环境  library不能独立运行
+} else {
+    apply plugin: 'com.android.application' // 测试环境 application独立运行
+}
+apply plugin: 'org.jetbrains.kotlin.android'
 
 android {
     namespace 'com.mi.order'

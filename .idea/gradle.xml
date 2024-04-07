@@ -13,13 +13,15 @@
             <option value="$PROJECT_DIR$/mylibrary" />
             <option value="$PROJECT_DIR$/scroll-event-demo" />
             <option value="$PROJECT_DIR$/xshell" />
+            <option value="$PROJECT_DIR$/xshell/common" />
+            <option value="$PROJECT_DIR$/xshell/compiler" />
             <option value="$PROJECT_DIR$/xshell/login" />
+            <option value="$PROJECT_DIR$/xshell/mrouter-annotations" />
             <option value="$PROJECT_DIR$/xshell/order" />
           </set>
         </option>
         <option name="resolveExternalAnnotations" value="false" />
       </GradleProjectSettings>
     </option>
-    <option name="offlineMode" value="true" />
   </component>
 </project>

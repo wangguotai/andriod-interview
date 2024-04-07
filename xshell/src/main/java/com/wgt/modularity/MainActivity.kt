@@ -10,7 +10,9 @@ import com.example.xshell.BuildConfig
 import com.example.xshell.R
 import com.mi.login.LoginMainActivity
 import com.mi.order.OrderMainActivity
+import com.mi.router_annotation.MRouter
 
+@MRouter(path = "MainActivity", group = "APP")
 class MainActivity : AppCompatActivity() {
     companion object {
         val TAG = MainActivity::class.java.simpleName

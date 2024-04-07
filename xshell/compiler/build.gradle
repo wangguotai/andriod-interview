@@ -2,6 +2,16 @@ plugins {
     id 'java-library'
     alias(libs.plugins.org.jetbrains.kotlin.jvm)
 }
+dependencies {
+    // 服务
+    compileOnly 'com.google.auto.service:auto-service:1.0-rc4'
+    annotationProcessor 'com.google.auto-service:auto-service:1.0-rc4'
+    // 帮助我们通过类调用的形式来生成Java代码 [JavaPoet]
+    compileOnly 'com.squareup:javapoet:1.9.0'
+    // 操作的注解
+    compileOnly project(":xshell:mrouter-annotations")
+
+}
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_7

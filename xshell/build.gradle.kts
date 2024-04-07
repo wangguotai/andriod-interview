@@ -72,4 +72,6 @@ dependencies {
     } else {
         // 不能依附，因为 login 模块能独立运行
     }
+    // 依赖注解
+    compileOnly(project(":xshell:mrouter-annotations"))
 }

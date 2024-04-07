@@ -67,6 +67,7 @@ dependencies {
     if (isRelease) {
         // 依附app壳
         implementation(project(":xshell:login"))
+        implementation(project(":xshell:order"))
     } else {
         // 不能依附，因为 login 模块能独立运行
     }

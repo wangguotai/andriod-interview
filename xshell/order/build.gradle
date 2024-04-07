@@ -13,7 +13,9 @@ android {
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.mi.order"
+        if (!isRelease) {
+            applicationId "com.mi.order"
+        }
         minSdk 24
         targetSdk 34
         versionCode 1

@@ -9,6 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.xshell.BuildConfig
 import com.example.xshell.R
 import com.mi.login.LoginMainActivity
+import com.mi.order.OrderMainActivity
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -35,7 +36,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun startLoginModel(view: View) {
-        startActivity(Intent(this@MainActivity, LoginMainActivity::class.java))
+    // app ---> 登录
+    fun jumpLogin(view: View?) {
+        val intent = Intent(this, LoginMainActivity::class.java)
+        intent.putExtra("name", "Derry")
+        startActivity(intent)
+    }
+
+    // app ---> Order订单
+    fun jumpOrder(view: View?) {
+        val intent = Intent(this, OrderMainActivity::class.java)
+        intent.putExtra("name", "Derry")
+        startActivity(intent)
     }
 }

@@ -25,6 +25,13 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // 传递参数 当app包名发生变化，可以动态的告知 注解处理器
+        javaCompileOptions {
+            annotationProcessorOptions {
+                argument("wgt", "hello javapoet")
+            }
+        }
     }
 
     buildFeatures {
@@ -73,5 +80,7 @@ dependencies {
         // 不能依附，因为 login 模块能独立运行
     }
     // 依赖注解
-    compileOnly(project(":xshell:mrouter-annotations"))
+    implementation(project(":xshell:mrouter-annotations"))
+    // 使用自定义的注解处理器
+    annotationProcessor(project(":xshell:compiler"))
 }

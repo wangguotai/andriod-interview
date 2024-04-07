@@ -1,4 +1,4 @@
-package com.example.register
+package com.mi.login
 
 import org.junit.Assert.assertEquals
 import org.junit.Test

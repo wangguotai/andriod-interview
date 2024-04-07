@@ -28,9 +28,8 @@ ext {
 
     // 建立Map存储，  key 和 value  都是自定义的
     appID = [
-            app     : "com.example.xshell",
-            login   : "com.derry.login",
-            register: "com.derry.register"
+            app  : "com.example.xshell",
+            login: "com.mi.login",
     ]
 
     // 300 行  MAP  key  value

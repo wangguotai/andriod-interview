@@ -1,11 +1,14 @@
 package com.wgt.modularity
 
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
+import android.view.View
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.example.xshell.BuildConfig
 import com.example.xshell.R
+import com.mi.login.LoginMainActivity
 
 class MainActivity : AppCompatActivity() {
     companion object {
@@ -30,5 +33,9 @@ class MainActivity : AppCompatActivity() {
                 Toast.LENGTH_SHORT
             ).show()
         }
+    }
+
+    fun startLoginModel(view: View) {
+        startActivity(Intent(this@MainActivity, LoginMainActivity::class.java))
     }
 }

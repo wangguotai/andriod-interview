@@ -60,7 +60,14 @@ dependencies {
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
     implementation(libs.constraintlayout)
+    implementation(project(":xshell:login"))
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+    if (isRelease) {
+        // 依附app壳
+        implementation(project(":xshell:login"))
+    } else {
+        // 不能依附，因为 login 模块能独立运行
+    }
 }

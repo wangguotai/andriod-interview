@@ -2,6 +2,7 @@ apply(from = "config.gradle")
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
+    id("kotlin-kapt")
 }
 println("build xshell module")
 
@@ -82,5 +83,6 @@ dependencies {
     // 依赖注解
     implementation(project(":xshell:mrouter-annotations"))
     // 使用自定义的注解处理器
-    annotationProcessor(project(":xshell:compiler"))
+    kapt(project(":xshell:compiler"))
+
 }

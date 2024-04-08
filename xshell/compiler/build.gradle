@@ -1,14 +1,13 @@
 plugins {
     id 'java-library'
+    id 'kotlin-kapt'
     alias(libs.plugins.org.jetbrains.kotlin.jvm)
 }
 dependencies {
     // 背后的服务 能够监听 你是否在编译中.....
     // AS3 .4 .1 +Gradle 5.1 .1 + auto - service: 1.0 - rc4
-    implementation("com.google.auto.service:auto-service:1.0-rc4")
-//    annotationProcessor("com.google.auto.service:auto-service:1.0-rc4")
-
-//    implementation("com.google.auto.service:auto-service:1.1.1")
+    implementation(libs.auto.service)
+    kapt(libs.auto.service)
 //    annotationProcessor("com.google.auto.service:auto-service:1.2.1")
 // https://mvnrepository.com/artifact/com.google.auto.service/auto-service
 //    implementation 'com.google.auto.service:auto-service:1.1.1'
@@ -22,6 +21,10 @@ dependencies {
 }
 
 java {
-    sourceCompatibility = JavaVersion.VERSION_1_7
-    targetCompatibility = JavaVersion.VERSION_1_7
+    sourceCompatibility = JavaVersion.VERSION_1_8
+    targetCompatibility = JavaVersion.VERSION_1_8
+}
+
+compileKotlin {
+    kotlinOptions.jvmTarget = "1.8"
 }

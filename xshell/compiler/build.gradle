@@ -4,19 +4,16 @@ plugins {
     alias(libs.plugins.org.jetbrains.kotlin.jvm)
 }
 dependencies {
-    // 背后的服务 能够监听 你是否在编译中.....
-    // AS3 .4 .1 +Gradle 5.1 .1 + auto - service: 1.0 - rc4
-    implementation(libs.auto.service)
-    kapt(libs.auto.service)
-//    annotationProcessor("com.google.auto.service:auto-service:1.2.1")
-// https://mvnrepository.com/artifact/com.google.auto.service/auto-service
-//    implementation 'com.google.auto.service:auto-service:1.1.1'
-
-    // 帮助我们通过类调用的形式来生成Java代码 [JavaPoet]
-//    implementation("com.squareup:javapoet:1.9.0")
-
     // 操作的注解
     implementation project(":xshell:mrouter-annotations")
+    // 背后的服务 能够监听 你是否在编译中.....
+//    implementation(libs.auto.service)
+//    kapt(libs.auto.service)
+    implementation 'com.google.auto.service:auto-service:1.0-rc7'
+    annotationProcessor 'com.google.auto.service:auto-service:1.0-rc7'
+    // 帮助我们通过类调用的形式来生成Java代码 [JavaPoet]
+    implementation("com.squareup:javapoet:1.13.0")
+
 
 }
 

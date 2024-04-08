@@ -24,14 +24,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
-
+//        https://www.cnblogs.com/linghu-java/p/13934992.html
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // 传递参数 当app包名发生变化，可以动态的告知 注解处理器
-        javaCompileOptions {
-            annotationProcessorOptions {
-                argument("wgt", "hello javapoet")
+        kapt {
+            arguments {
+                arg("wgt", "hello javapoet")
             }
+            useBuildCache = false
         }
     }
 

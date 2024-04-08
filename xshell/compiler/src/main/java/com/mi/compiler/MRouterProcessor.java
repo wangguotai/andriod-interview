@@ -22,7 +22,6 @@ import javax.tools.Diagnostic;
 @AutoService(Processor.class) // 启动服务
 @SupportedAnnotationTypes({"com.mi.router_annotation.MRouter"}) // 服务于哪个注解
 @SupportedSourceVersion(SourceVersion.RELEASE_8)   // java环境的版本
-
 // 接收 安卓工程传递过来的参数
 @SupportedOptions("wgt")
 public class MRouterProcessor extends AbstractProcessor {

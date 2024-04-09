@@ -5,7 +5,9 @@ import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
+import com.mi.router_annotation.MRouter
 
+@MRouter(path = "/order/OrderMainActivity")
 class OrderMainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

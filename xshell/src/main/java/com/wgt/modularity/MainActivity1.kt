@@ -12,10 +12,10 @@ import com.mi.login.LoginMainActivity
 import com.mi.order.OrderMainActivity
 import com.mi.router_annotation.MRouter
 
-@MRouter(path = "/xshell/MainActivity")
-class MainActivity : AppCompatActivity() {
+@MRouter(path = "/xshell/MainActivity1")
+class MainActivity1 : AppCompatActivity() {
     companion object {
-        val TAG = MainActivity::class.java.simpleName
+        val TAG = MainActivity1::class.java.simpleName
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +50,5 @@ class MainActivity : AppCompatActivity() {
         val intent = Intent(this, OrderMainActivity::class.java)
         intent.putExtra("name", "Derry")
         startActivity(intent)
-//        val startClass = `OrderMainActivity$$MRouter`.findTargetClass("/order/OrderMainActivity")
     }
 }

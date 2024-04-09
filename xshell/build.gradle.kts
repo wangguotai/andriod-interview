@@ -83,7 +83,7 @@ dependencies {
         // 不能依附，因为 login 模块能独立运行
     }
     // 依赖注解
-    implementation(project(":xshell:mrouter-annotations"))
+//    implementation(project(":xshell:mrouter-annotations"))
     // 使用自定义的注解处理器
     kapt(project(":xshell:compiler"))
 }

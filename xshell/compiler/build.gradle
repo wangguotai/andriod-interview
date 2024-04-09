@@ -8,16 +8,21 @@ dependencies {
     implementation project(":xshell:mrouter-annotations")
     // 背后的服务 能够监听 你是否在编译中.....
     // auto-service 存在坑，弃用了
-//    implementation(libs.auto.service)
-//    kapt(libs.auto.service)
-    implementation("com.squareup:javapoet:1.13.0")
+    implementation(libs.auto.service)
+    kapt(libs.auto.service)
     // 帮助我们通过类调用的形式来生成Java代码 [JavaPoet]
+    implementation("com.squareup:javapoet:1.13.0")
+//    implementation("com.squareup:kotlinpoet:1.13.0")
 }
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8
 }
+//kapt{
+//    correctErrorTypes = true
+//    useBuildCache = false
+//}
 
 compileKotlin {
     kotlinOptions.jvmTarget = "1.8"

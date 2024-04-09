@@ -65,6 +65,7 @@ class MyRouterProcessor : AbstractProcessor() {
     override fun init(processingEnvironment: ProcessingEnvironment) {
         super.init(processingEnvironment)
         elementTool = processingEnvironment.elementUtils
+        typeTool = processingEnvironment.typeUtils
         messager = processingEnvironment.messager
         filer = processingEnvironment.filer
         moduleName = processingEnvironment.options[ProcessorConfig.OPTIONS].toString()
@@ -153,8 +154,11 @@ class MyRouterProcessor : AbstractProcessor() {
         // 第二大步： 组头
         try {
             createGroupFile(groupType, pathType)
+        } catch (e: IOException) {
+            e.printStackTrace()
+            messager.printMessage(Diagnostic.Kind.NOTE, "在生成GROUP模板时，异常了: ${e.message}")
         }
-        return false
+        return false // 必须写返回值， 表示@MRouter注解完成
     }
 
     /**
@@ -180,7 +184,50 @@ class MyRouterProcessor : AbstractProcessor() {
                 WildcardTypeName.subtypeOf(ClassName.get(pathType)) // 泛型下界
             )
         )
-//        val methodBuilder
+        // 1. 方法 public Map<String, Class<? extends MRouterPath> getGroupMap(){}
+        val methodBuilder = MethodSpec.methodBuilder(ProcessorConfig.GROUP_METHOD_NAME) // 方法名
+            .addAnnotation(Override::class.java)
+            .addModifiers(Modifier.PUBLIC)
+            .returns(methodReturns)
+        // Map<String, Class<? extends MRouterPath>> groupMap = new HashMap<>();
+        methodBuilder.addStatement(
+            "\$T<\$T, \$T> \$N = new \$T<>()",
+            ClassName.get(Map::class.java),
+            ClassName.get(String::class.java),
+            ParameterizedTypeName.get(
+                ClassName.get(Class::class.java),
+                WildcardTypeName.subtypeOf(ClassName.get(pathType))
+            ), // ? extends MRouterPath
+            ProcessorConfig.GROUP_VAR1,
+            ClassName.get(Map::class.java)
+        )
+        // groupMap.put("order", MRouter$$Path$${group});
+        // 将每个group下的 groupPathList 都添加到 groupMap中
+        for (entry in mAllGroupMap) {
+            methodBuilder.addStatement(
+                "\$N.put(\$S, \$T.class)",
+                ProcessorConfig.GROUP_VAR1, // groupMap.put
+                entry.key,
+                ClassName.get(packageNameForAPT, entry.value)
+            )
+        }
+        // return groupMap;
+        methodBuilder.addStatement("return \$N", ProcessorConfig.GROUP_VAR1)
+        val finalClassName = ProcessorConfig.GROUP_FILE_NAME + moduleName
+        messager.printMessage(
+            Diagnostic.Kind.NOTE,
+            "APT生成路由组Group类文件：$packageNameForAPT.$finalClassName"
+        )
+        // 生成类文件： MRouter$$Group$$app
+        JavaFile.builder(
+            packageNameForAPT, // 包名
+            TypeSpec.classBuilder(finalClassName) // 类名
+                .addSuperinterface(ClassName.get(groupType))
+                .addModifiers(Modifier.PUBLIC)
+                .addMethod(methodBuilder.build())
+                .build()  // 类构建完成
+        ).build() // JavaFile构建完成
+            .writeTo(filer) // 文件生成器开始生成类文件
     }
 
     /**

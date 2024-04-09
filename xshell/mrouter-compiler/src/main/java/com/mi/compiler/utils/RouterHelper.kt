@@ -18,7 +18,6 @@ object RouterHelper {
     fun checkoutRouterPath(bean: RouterBean, messager: Messager, options: String): Boolean {
         val group = bean.group
         val path = bean.path
-
         // 校验
         if (path.isNullOrEmptyKt() || !regex.matches(path)) {
             messager.printMessage(
@@ -28,7 +27,8 @@ object RouterHelper {
             return false
         }
         val finalGroup = path.substring(1, path.indexOf("/", 1))
-        if (group.isNullOrEmptyKt() && !group.equals(options)) {
+        // 如果 group有赋值 但 和模块名不一致
+        if (group.isNotNullOrEmptyKt() && !group.equals(options)) {
             messager.printMessage(
                 Diagnostic.Kind.ERROR,
                 "@MRouter注解中的group值，必须和子模块名一致"

@@ -3,6 +3,13 @@
 // 扩展快
 ext {
 
+    // 在gradle文件中配置选项参数值（用于APT传参接收）与 ProcessorConfig 中的key保持一致
+    aptArgs = [
+            "moduleName"       : project.getName(),
+            "packageNameForAPT": "com.wgt.mrouter"
+    ]
+
+
     // 现在 Gradle
     // 正式环境 和 测试环境
     isRelease = true

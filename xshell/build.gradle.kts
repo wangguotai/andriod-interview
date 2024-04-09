@@ -11,7 +11,7 @@ val appID: Map<String, String> by extra
 val androidID: Map<String, String> by extra
 val url: Map<String, String> by ext
 val isRelease: Boolean by ext
-
+val aptArgs: Map<String, String> by extra
 android {
     namespace = appID["app"].toString()
 //    namespace = "com.example.xshell"
@@ -27,10 +27,12 @@ android {
 //        https://www.cnblogs.com/linghu-java/p/13934992.html
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // 传递参数 当app包名发生变化，可以动态的告知 注解处理器
+        // 向annotation Processor中传入参数
         kapt {
             arguments {
-                arg("wgt", "hello javapoet")
+                for (item in aptArgs) {
+                    arg(item.key, item.value)
+                }
             }
             // 不适用编译过程中的缓存，避免异常情况
             useBuildCache = false

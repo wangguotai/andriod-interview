@@ -23,7 +23,13 @@ android {
         versionName "1.0"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = aptArgs
+            }
+        }
     }
+
 
     buildTypes {
         release {
@@ -63,5 +69,5 @@ dependencies {
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     implementation(project(":xshell:common"))
-    kapt kapt(project(':xshell:mrouter-compiler',))
+    kapt(project(':xshell:mrouter-compiler'))
 }

@@ -15,6 +15,27 @@ public class RouterBean {
     private Element element; // 类节点 JavaPoet学习的时候，可以拿到很多的信息
     private Class<?> myClass; // 被注解的 Class对象 例如： MainActivity.class  Main2Activity.class  Main3Activity.class
     private String path; // 路由地址  例如：/app/MainActivity
+
+    public void setTypeEnum(TypeEnum typeEnum) {
+        this.typeEnum = typeEnum;
+    }
+
+    public void setElement(Element element) {
+        this.element = element;
+    }
+
+    public void setMyClass(Class<?> myClass) {
+        this.myClass = myClass;
+    }
+
+    public void setPath(String path) {
+        this.path = path;
+    }
+
+    public void setGroup(String group) {
+        this.group = group;
+    }
+
     private String group; // 路由组  例如：app  order  personal
 
     private RouterBean(TypeEnum typeEnum, /*Element element,*/ Class<?> myClass, String path, String group) {
@@ -59,6 +80,7 @@ public class RouterBean {
     public String getGroup() {
         return group;
     }
+
 
     @Override
     public String toString() {

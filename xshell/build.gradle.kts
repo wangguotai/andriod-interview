@@ -75,6 +75,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(project(":xshell:common"))
+    "kapt"(project(":xshell:mrouter-compiler"))
     if (isRelease) {
         // 依附app壳
         implementation(project(":xshell:login"))
@@ -85,5 +86,4 @@ dependencies {
     // 依赖注解
 //    implementation(project(":xshell:mrouter-annotations"))
     // 使用自定义的注解处理器
-    kapt(project(":xshell:compiler"))
 }

@@ -63,5 +63,5 @@ dependencies {
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     implementation(project(":xshell:common"))
-    kapt(project(":xshell:compiler"))
+    kapt kapt(project(':xshell:mrouter-compiler',))
 }

@@ -14,9 +14,10 @@
             <option value="$PROJECT_DIR$/scroll-event-demo" />
             <option value="$PROJECT_DIR$/xshell" />
             <option value="$PROJECT_DIR$/xshell/common" />
-            <option value="$PROJECT_DIR$/xshell/compiler" />
             <option value="$PROJECT_DIR$/xshell/login" />
             <option value="$PROJECT_DIR$/xshell/mrouter-annotations" />
+            <option value="$PROJECT_DIR$/xshell/mrouter-api" />
+            <option value="$PROJECT_DIR$/xshell/mrouter-compiler" />
             <option value="$PROJECT_DIR$/xshell/order" />
           </set>
         </option>

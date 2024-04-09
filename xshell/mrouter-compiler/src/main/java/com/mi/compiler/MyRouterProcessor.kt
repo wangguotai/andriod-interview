@@ -145,6 +145,6 @@ class MyRouterProcessor : AbstractProcessor() {
         filer = processingEnvironment.filer
         val value = processingEnvironment.options["wgt"]
         // 如果想要在注解处理器里面抛出异常， 可以使用Diagnostic.Kind.ERROR
-        messager!!.printMessage(Diagnostic.Kind.NOTE, ">>>>>>>>>>>>>>>>>$value")
+        messager.printMessage(Diagnostic.Kind.NOTE, ">>>>>>>>>>>>>>>>>$value")
     }
 }

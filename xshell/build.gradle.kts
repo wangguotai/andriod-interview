@@ -85,5 +85,4 @@ dependencies {
     implementation(project(":xshell:mrouter-annotations"))
     // 使用自定义的注解处理器
     kapt(project(":xshell:compiler"))
-
 }

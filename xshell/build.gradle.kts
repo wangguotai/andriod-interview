@@ -32,6 +32,7 @@ android {
             arguments {
                 arg("wgt", "hello javapoet")
             }
+            // 不适用编译过程中的缓存，避免异常情况
             useBuildCache = false
         }
     }

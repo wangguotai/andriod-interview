@@ -1,6 +1,5 @@
-package com.mi.compiler
+package com.mi.compiler.processor
 
-import com.google.auto.service.AutoService
 import com.mi.compiler.utils.ProcessorConfig
 import com.mi.compiler.utils.RouterHelper
 import com.mi.compiler.utils.isNotNullOrEmptyKt
@@ -19,7 +18,6 @@ import javax.annotation.processing.AbstractProcessor
 import javax.annotation.processing.Filer
 import javax.annotation.processing.Messager
 import javax.annotation.processing.ProcessingEnvironment
-import javax.annotation.processing.Processor
 import javax.annotation.processing.RoundEnvironment
 import javax.annotation.processing.SupportedOptions
 import javax.annotation.processing.SupportedSourceVersion
@@ -31,7 +29,7 @@ import javax.lang.model.util.Types
 import javax.tools.Diagnostic
 
 
-@AutoService(Processor::class)
+//@AutoService(Processor::class)
 @SupportedOptions(ProcessorConfig.OPTIONS, ProcessorConfig.APT_PACKAGE) // 接收 安卓工程传递过来的参数
 @SupportedSourceVersion(SourceVersion.RELEASE_8) // java环境的版本
 class MyRouterProcessor : AbstractProcessor() {
@@ -90,13 +88,13 @@ class MyRouterProcessor : AbstractProcessor() {
         set: MutableSet<out TypeElement>,
         roundEnvironment: RoundEnvironment
     ): Boolean {
+        if (set.isEmpty()) {
+            return false
+        }
         messager.printMessage(
             Diagnostic.Kind.NOTE,
             ">>>>>>>>>>>>>>>>>注解处理程序开始工作 $supportedAnnotationTypes"
         )
-        if (set.isEmpty()) {
-            return false
-        }
         // 获取被MRouter注解的"类节点信息"
         val elements = roundEnvironment.getElementsAnnotatedWith(MRouter::class.java)
 

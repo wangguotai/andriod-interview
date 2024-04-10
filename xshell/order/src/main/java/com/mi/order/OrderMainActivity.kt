@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
+import com.mi.mrouter_api.ParameterManager
 import com.mi.router_annotation.MRouter
 import com.mi.router_annotation.Parameter
 
@@ -23,6 +24,8 @@ class OrderMainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_order_main)
+        // ARouter.inject的过程
+        ParameterManager.getInstance().loadParameter(this)
     }
 
     fun jumpApp(view: View) {}

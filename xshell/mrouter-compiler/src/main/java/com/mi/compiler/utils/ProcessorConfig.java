@@ -1,5 +1,8 @@
 package com.mi.compiler.utils;
 
+import com.mi.router_annotation.MRouter;
+import com.mi.router_annotation.Parameter;
+
 public interface ProcessorConfig {
     // @MRouter注解 的 包名 + 类名
     String MROUTER_PACKAGE = "com.mi.router_annotation.MRouter";
@@ -24,6 +27,7 @@ public interface ProcessorConfig {
 
     // MRouter api 的 MRouterPath 高层标准
     String MROUTER_API_PATH = MROUTER_API_PACKAGE + "." + MROUTER_API_MROUTERPATH_SIMPLENAME;
+    String MROUTER_API_PARAMETER_GET = MROUTER_API_PACKAGE + ".ParameterGet";
 
     // 路由组，中的 Path 里面的 方法名
     String PATH_METHOD_NAME = "getPathMap";
@@ -42,4 +46,14 @@ public interface ProcessorConfig {
 
     // 路由组，GROUP 最终要生成的 文件名
     String GROUP_FILE_NAME = "MRouter$$Group$$";
+    final String MROUTER_ANNOTATION_ROUTER = MRouter.class.getCanonicalName();
+    final String MROUTER_ANNOTATION_PARAMETER_CANONICALNAME = Parameter.class.getCanonicalName();
+
+    // 生成的文件名后缀
+    String PARAMETER_FILE_NAME = "$$Parameter";
+    // MRouter api 的 ParameterGet 方法参数的名字
+    String PARAMETER_PARAM_NAME = "targetParameter";
+    String PARAMETER_METHOD_NAME = "getParameter";
+    // String全类名
+    public static final String STRING = "java.lang.String";
 }

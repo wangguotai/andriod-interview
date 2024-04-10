@@ -6,9 +6,20 @@ import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
 import com.mi.router_annotation.MRouter
+import com.mi.router_annotation.Parameter
 
 @MRouter(path = "/order/OrderMainActivity")
 class OrderMainActivity : AppCompatActivity() {
+
+    @JvmField
+    @Parameter
+    var age: Int = 0
+
+    @JvmField
+    @Parameter
+    var name: String = ""
+
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_order_main)

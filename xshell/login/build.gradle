@@ -7,10 +7,8 @@ if (isRelease) { // 如果是发布版本时，各个模块都不能独立运行
     apply plugin: 'com.android.application' // 测试环境 application独立运行
 }
 apply plugin: 'org.jetbrains.kotlin.android'
-//plugins {
-//    alias(libs.plugins.androidApplication)
-//    alias(libs.plugins.jetbrainsKotlinAndroid)
-//}
+apply plugin: 'kotlin-kapt'
+
 
 android {
     namespace 'com.mi.login'
@@ -24,7 +22,11 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
-
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = aptArgs
+            }
+        }
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -70,4 +72,6 @@ dependencies {
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
     implementation(project(":xshell:common"))
+    kapt(project(":xshell:mrouter-compiler"))
+    implementation(project(":xshell:mrouter-api"))
 }

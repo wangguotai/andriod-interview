@@ -42,7 +42,8 @@ object RouterManager {
     // 真正的导航
     fun navigation(context: Context, bundleManager: BundleManager) {
         // 例如：寻找 MRouter$$Group$$personal  寻址   MRouter$$Group$$order   MRouter$$Group$$app
-        val groupClassName = context.packageName + "." + FILE_GROUP_NAME + group
+//        val groupClassName = context.packageName + "." + FILE_GROUP_NAME + group
+        val groupClassName = "com.wgt.mrouter.$FILE_GROUP_NAME$group"
         Log.e("wgt >>>", "navigation: groupClassName=$groupClassName")
         try {
             // 第一步 读取路由组Group类文件
@@ -88,7 +89,7 @@ object RouterManager {
                             routerBean.myClass
                         ) // 例如：getClazz == Order_MainActivity.class
                         intent.putExtras(bundleManager.bundle) // 携带参数
-                        context.startActivity(intent, bundleManager.bundle)
+                        context.startActivity(intent)
                     }
 
                     null -> {

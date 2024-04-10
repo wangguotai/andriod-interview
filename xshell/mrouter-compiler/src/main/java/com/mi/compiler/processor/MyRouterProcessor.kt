@@ -1,5 +1,6 @@
 package com.mi.compiler.processor
 
+import com.google.auto.service.AutoService
 import com.mi.compiler.utils.ProcessorConfig
 import com.mi.compiler.utils.RouterHelper
 import com.mi.compiler.utils.isNotNullOrEmptyKt
@@ -18,6 +19,7 @@ import javax.annotation.processing.AbstractProcessor
 import javax.annotation.processing.Filer
 import javax.annotation.processing.Messager
 import javax.annotation.processing.ProcessingEnvironment
+import javax.annotation.processing.Processor
 import javax.annotation.processing.RoundEnvironment
 import javax.annotation.processing.SupportedOptions
 import javax.annotation.processing.SupportedSourceVersion
@@ -29,7 +31,7 @@ import javax.lang.model.util.Types
 import javax.tools.Diagnostic
 
 
-//@AutoService(Processor::class)
+@AutoService(Processor::class)
 @SupportedOptions(ProcessorConfig.OPTIONS, ProcessorConfig.APT_PACKAGE) // 接收 安卓工程传递过来的参数
 @SupportedSourceVersion(SourceVersion.RELEASE_8) // java环境的版本
 class MyRouterProcessor : AbstractProcessor() {
@@ -68,6 +70,7 @@ class MyRouterProcessor : AbstractProcessor() {
         filer = processingEnvironment.filer
         moduleName = processingEnvironment.options[ProcessorConfig.OPTIONS].toString()
         packageNameForAPT = processingEnvironment.options[ProcessorConfig.APT_PACKAGE].toString()
+//        packageNameForAPT = processingEnvironment
         if (moduleName.isNotNullOrEmptyKt() && packageNameForAPT.isNotNullOrEmptyKt()) {
             messager.printMessage(Diagnostic.Kind.NOTE, "APT 环境搭建完成....")
             // 如果想要在注解处理器里面抛出异常， 可以使用Diagnostic.Kind.ERROR

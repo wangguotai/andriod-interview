@@ -24,13 +24,13 @@ import javax.tools.Diagnostic
  */
 class ParameterFactory private constructor(builder: Builder) {
     // 方法的构建
-    private lateinit var method: MethodSpec.Builder
+    private var method: MethodSpec.Builder
 
     // 类名
-    private lateinit var className: ClassName
+    private var className: ClassName
 
     // messager 用来处理信息输入
-    private lateinit var messager: Messager
+    private var messager: Messager
 
     init {
         this.messager = builder.messager!!

@@ -9,7 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.xshell.BuildConfig
 import com.example.xshell.R
 import com.mi.login.LoginMainActivity
-import com.mi.order.OrderMainActivity
+import com.mi.mrouter_api.manager.RouterManager
 import com.mi.router_annotation.MRouter
 
 @MRouter(path = "/xshell/MainActivity")
@@ -47,9 +47,12 @@ class MainActivity : AppCompatActivity() {
 
     // app ---> Order订单
     fun jumpOrder(view: View?) {
-        val intent = Intent(this, OrderMainActivity::class.java)
-        intent.putExtra("name", "Derry")
-        startActivity(intent)
+        RouterManager.build("/order/OrderMainActivity")
+            .withInt("age", 8)
+            .navigation(this)
+//        val intent = Intent(this, OrderMainActivity::class.java)
+//        intent.putExtra("name", "Derry")
+//        startActivity(intent)
 //        val startClass = `OrderMainActivity$$MRouter`.findTargetClass("/order/OrderMainActivity")
     }
 }

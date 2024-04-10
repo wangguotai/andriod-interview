@@ -1,5 +1,6 @@
-package com.mi.mrouter_api
+package com.mi.mrouter_api.manager
 
+import com.mi.mrouter_api.ParameterGet
 import com.mi.mrouter_api.widget.LruCache
 
 /**

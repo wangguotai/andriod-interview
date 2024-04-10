@@ -5,7 +5,7 @@ import android.os.Bundle
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
-import com.mi.mrouter_api.ParameterManager
+import com.mi.mrouter_api.manager.ParameterManager
 import com.mi.router_annotation.MRouter
 import com.mi.router_annotation.Parameter
 

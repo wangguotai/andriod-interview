@@ -141,34 +141,40 @@ class MyRouterProcessor : AbstractProcessor() {
             }
         }
         // 定义（生成类文件实现的接口） 有 Path Group
+        val pathClassName = ClassName.get(
+            ProcessorConfig.MROUTER_API_PACKAGE,
+            ProcessorConfig.MROUTER_API_MROUTERPATH_SIMPLENAME
+        )
         val pathType = elementTool.getTypeElement(ProcessorConfig.MROUTER_API_PATH) // ARouterPath描述
-        val groupType =
-            elementTool.getTypeElement(ProcessorConfig.MROUTER_API_GROUP) // ARouterPath描述
+        val groupClassName = ClassName.get(
+            ProcessorConfig.MROUTER_API_PACKAGE,
+            ProcessorConfig.MROUTER_API_MROUTERGROUP_SIMPLENAME
+        )
         // 第一大步: 系列PATH
         try {
-            createPathFile(pathType) // 生成 Path类
+            createPathFile(pathType, pathClassName) // 生成 Path类
         } catch (e: IOException) {
             e.printStackTrace()
             messager.printMessage(Diagnostic.Kind.NOTE, "在生成PATH模板时，异常了 e:" + e.message)
         }
         // 第二大步： 组头
         try {
-            createGroupFile(groupType, pathType)
+            createGroupFile(groupClassName, pathClassName)
         } catch (e: IOException) {
             e.printStackTrace()
             messager.printMessage(Diagnostic.Kind.NOTE, "在生成GROUP模板时，异常了: ${e.message}")
         }
-        return false // 必须写返回值， 表示@MRouter注解完成
+        return true  // 必须写返回值， 表示@MRouter注解完成
     }
 
     /**
      * 生成路由组Group文件，如 MRouter$$Group$${group}
      * Create group file
      *
-     * @param groupType
-     * @param pathType
+     * @param groupClassName
+     * @param pathClassName
      */
-    private fun createGroupFile(groupType: TypeElement, pathType: TypeElement) {
+    private fun createGroupFile(groupClassName: ClassName, pathClassName: ClassName) {
         // 仓库二 判断是否有需要生成的类文件
         if (mAllGroupMap.isNullOrEmptyKt() || mAllPathMap.isNullOrEmptyKt()) {
             return
@@ -181,7 +187,7 @@ class MyRouterProcessor : AbstractProcessor() {
             ParameterizedTypeName.get(
                 ClassName.get(Class::class.java),
                 // ? extends
-                WildcardTypeName.subtypeOf(ClassName.get(pathType)) // 泛型下界
+                WildcardTypeName.subtypeOf(pathClassName) // 泛型下界
             )
         )
         // 1. 方法 public Map<String, Class<? extends MRouterPath> getGroupMap(){}
@@ -196,10 +202,10 @@ class MyRouterProcessor : AbstractProcessor() {
             ClassName.get(String::class.java),
             ParameterizedTypeName.get(
                 ClassName.get(Class::class.java),
-                WildcardTypeName.subtypeOf(ClassName.get(pathType))
+                WildcardTypeName.subtypeOf(pathClassName)
             ), // ? extends MRouterPath
             ProcessorConfig.GROUP_VAR1,
-            ClassName.get(Map::class.java)
+            ClassName.get(HashMap::class.java)
         )
         // groupMap.put("order", MRouter$$Path$${group});
         // 将每个group下的 groupPathList 都添加到 groupMap中
@@ -222,7 +228,7 @@ class MyRouterProcessor : AbstractProcessor() {
         JavaFile.builder(
             packageNameForAPT, // 包名
             TypeSpec.classBuilder(finalClassName) // 类名
-                .addSuperinterface(ClassName.get(groupType))
+                .addSuperinterface(groupClassName)
                 .addModifiers(Modifier.PUBLIC)
                 .addMethod(methodBuilder.build())
                 .build()  // 类构建完成
@@ -236,7 +242,7 @@ class MyRouterProcessor : AbstractProcessor() {
      *
      * @param pathType
      */
-    private fun createPathFile(pathType: TypeElement) {
+    private fun createPathFile(pathType: TypeElement?, pathClassName: ClassName) {
         // 判断map仓库中，是否有需要生成的文件
         if (mAllPathMap.isNullOrEmptyKt()) {
             return
@@ -294,10 +300,15 @@ class MyRouterProcessor : AbstractProcessor() {
                 "APT生成路由Path类文件：$packageNameForAPT.$finalClassName"
             );
             // 生成类文件
+            val className = if (pathType == null) {
+                pathClassName
+            } else {
+                ClassName.get(pathType)
+            }
             JavaFile.builder(
                 packageNameForAPT, // 包名 APT 存放的路径
                 TypeSpec.classBuilder(finalClassName) // 类名
-                    .addSuperinterface(ClassName.get(pathType))
+                    .addSuperinterface(className)
                     .addModifiers(Modifier.PUBLIC)
                     .addMethod(methodBuilder.build())
                     .build()

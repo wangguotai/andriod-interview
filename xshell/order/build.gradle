@@ -70,4 +70,5 @@ dependencies {
     androidTestImplementation libs.androidx.espresso.core
     implementation(project(":xshell:common"))
     kapt(project(':xshell:mrouter-compiler'))
+    implementation project(":xshell:mrouter-api")
 }

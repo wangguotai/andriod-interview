@@ -16,12 +16,14 @@ public interface ProcessorConfig {
 
     // MRouter api 包名
     String MROUTER_API_PACKAGE = "com.mi.mrouter_api";
+    String MROUTER_API_MROUTERPATH_SIMPLENAME = "MRouterPath";
+    String MROUTER_API_MROUTERGROUP_SIMPLENAME = "MRouterGroup";
 
     // MRouter api 的 MRouterGroup 高层标准
-    String MROUTER_API_GROUP = MROUTER_API_PACKAGE + ".MRouterGroup";
+    String MROUTER_API_GROUP = MROUTER_API_PACKAGE + "." + MROUTER_API_MROUTERGROUP_SIMPLENAME;
 
     // MRouter api 的 MRouterPath 高层标准
-    String MROUTER_API_PATH = MROUTER_API_PACKAGE + ".MRouterPath";
+    String MROUTER_API_PATH = MROUTER_API_PACKAGE + "." + MROUTER_API_MROUTERPATH_SIMPLENAME;
 
     // 路由组，中的 Path 里面的 方法名
     String PATH_METHOD_NAME = "getPathMap";

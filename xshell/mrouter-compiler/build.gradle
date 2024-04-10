@@ -7,7 +7,7 @@ dependencies {
     // 操作的注解
     implementation project(":xshell:mrouter-annotations")
     // 背后的服务 能够监听 你是否在编译中.....
-    // auto-service 存在坑，弃用了
+    // auto-service 在processor方法返回true后，处理器不会重复构建
     implementation(libs.auto.service)
     kapt(libs.auto.service)
     // 帮助我们通过类调用的形式来生成Java代码 [JavaPoet]

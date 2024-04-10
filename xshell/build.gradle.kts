@@ -77,11 +77,12 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(project(":xshell:common"))
-    "kapt"(project(":xshell:mrouter-compiler"))
+    kapt(project(":xshell:mrouter-compiler"))
     if (isRelease) {
         // 依附app壳
         implementation(project(":xshell:login"))
         implementation(project(":xshell:order"))
+        implementation(project(":xshell:mrouter-api"))
     } else {
         // 不能依附，因为 login 模块能独立运行
     }

@@ -20,6 +20,7 @@ import javax.annotation.processing.RoundEnvironment
 import javax.annotation.processing.SupportedSourceVersion
 import javax.lang.model.SourceVersion
 import javax.lang.model.element.Element
+import javax.lang.model.element.Modifier
 import javax.lang.model.element.TypeElement
 import javax.lang.model.util.Elements
 import javax.lang.model.util.Types
@@ -122,6 +123,7 @@ class MyParameterProcessor : AbstractProcessor() {
                             className.packageName(), // 包名
                             TypeSpec.classBuilder(finalClassName)
                                 .addSuperinterface(ClassName.get(parameterType))
+                                .addModifiers(Modifier.PUBLIC)
                                 .addMethod(factory.build()) // 方法的构建
                                 .build() // 类构建完成
                         ).build() // JavaFile 方法构建完成

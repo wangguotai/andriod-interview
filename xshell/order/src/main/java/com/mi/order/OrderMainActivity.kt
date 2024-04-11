@@ -2,6 +2,7 @@ package com.mi.order
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
@@ -18,12 +19,13 @@ class OrderMainActivity : AppCompatActivity() {
 
     @JvmField
     @Parameter
-    var name: String = ""
+    var name: String = "11"
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_order_main)
+        Log.d(OrderMainActivity::class.java.simpleName, "$name, $age")
         // ARouter.inject的过程
         ParameterManager.getInstance().loadParameter(this)
     }

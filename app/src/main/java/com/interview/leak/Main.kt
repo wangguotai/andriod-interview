@@ -32,3 +32,24 @@ fun main() {
         println("Weak reference enqueued: $ref")
     }
 }
+
+// 正确示例
+inline fun hello(crossinline block: () -> Unit) {
+    println("Say Hello!")
+    runOnUiThread {
+        block()
+    }
+}
+
+fun runOnUiThread(block: () -> Unit) {
+    block()
+}
+
+fun main1() {
+    hello {
+        println("Bye!")
+        return@hello
+    }
+}
+
+

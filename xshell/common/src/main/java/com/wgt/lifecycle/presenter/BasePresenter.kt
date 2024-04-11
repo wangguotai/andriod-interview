@@ -12,10 +12,10 @@ import java.lang.ref.WeakReference
  * Author: wgt
  * Description:
  */
-class BasePresenter<T : IBaseView?> : LifecycleOwner {
+open class BasePresenter<T : IBaseView> : LifecycleOwner {
     private val mLifecycleRegistry = LifecycleRegistry(this)
     var baseView: WeakReference<T>? = null
-    fun attachView(view: T) {
+    protected fun attachView(view: T) {
         baseView = WeakReference(view)
     }
 
@@ -30,31 +30,31 @@ class BasePresenter<T : IBaseView?> : LifecycleOwner {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
-    fun onCreateX(owner: LifecycleOwner?) {
+    protected open fun onCreateX(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_START)
-    fun onStartX(owner: LifecycleOwner?) {
+    protected fun onStartX(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
-    fun onStop(owner: LifecycleOwner?) {
+    protected fun onStop(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
-    fun onResume(owner: LifecycleOwner?) {
+    protected fun onResume(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-    fun onPause(owner: LifecycleOwner?) {
+    protected fun onPause(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-    fun onDestory(owner: LifecycleOwner?) {
+    protected open fun onDestory(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_ANY)
-    fun onAny(owner: LifecycleOwner?) {
+    protected fun onAny(owner: LifecycleOwner?) {
     }
 
     override val lifecycle: Lifecycle = mLifecycleRegistry

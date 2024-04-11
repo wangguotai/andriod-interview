@@ -25,10 +25,10 @@ abstract class BaseActivity<V : ViewDataBinding, P : IBaseView, T : BasePresente
     }
 
 
-    abstract fun init()
+    open fun init() {}
     abstract fun createPresenter(): T
-    abstract fun registerSDK()
-    abstract fun unRegisterSDK()
+    fun registerSDK() {}
+    fun unRegisterSDK() {}
 
     override fun onDestroy() {
         super.onDestroy()

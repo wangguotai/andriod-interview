@@ -37,5 +37,9 @@ dependencies {
     testImplementation libs.junit
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
+    //依赖协程核心库
+    implementation libs.org.jetbrains.kotlinx.coroutines.core
+    //依赖当前平台所对应的平台库
+    implementation libs.org.jetbrains.kotlinx.coroutines.android
     api(project(":xshell:mrouter-annotations"))
 }

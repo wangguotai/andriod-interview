@@ -21,6 +21,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        findViewById<>()
         if (BuildConfig.isRelease) {
             Log.d(TAG, "onCreate 当前是：集成化 线上环境，以app壳为主导运行的方式")
             Toast.makeText(

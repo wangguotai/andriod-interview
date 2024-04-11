@@ -1,76 +1,61 @@
-package com.wgt.lifecycle.presenter;
+package com.wgt.lifecycle.presenter
 
-import androidx.annotation.NonNull;
-import androidx.lifecycle.Lifecycle;
-import androidx.lifecycle.LifecycleOwner;
-import androidx.lifecycle.LifecycleRegistry;
-import androidx.lifecycle.OnLifecycleEvent;
-
-import com.wgt.lifecycle.presenter.interf.view.IBaseView;
-
-import java.lang.ref.WeakReference;
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.OnLifecycleEvent
+import com.wgt.lifecycle.presenter.interf.view.IBaseView
+import java.lang.ref.WeakReference
 
 /**
  * Time: 2024/4/11
  * Author: wgt
  * Description:
  */
-public class BasePresenter<T extends IBaseView> implements LifecycleOwner {
-    private final LifecycleRegistry mLifecycleRegistry = new LifecycleRegistry(this);
-    WeakReference<T> baseView;
-
-    public void attachView(T view) {
-        baseView = new WeakReference<>(view);
+class BasePresenter<T : IBaseView?> : LifecycleOwner {
+    private val mLifecycleRegistry = LifecycleRegistry(this)
+    var baseView: WeakReference<T>? = null
+    fun attachView(view: T) {
+        baseView = WeakReference(view)
     }
 
     /**
      * 解绑
      */
-    public void detachView() {
+    fun detachView() {
         if (baseView != null) {
-            baseView.clear();
-            baseView = null;
+            baseView!!.clear()
+            baseView = null
         }
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
-    void onCreateX(LifecycleOwner owner) {
-
+    fun onCreateX(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_START)
-    void onStartX(LifecycleOwner owner) {
+    fun onStartX(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_STOP)
-    void onStop(LifecycleOwner owner) {
+    fun onStop(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_RESUME)
-    void onResume(LifecycleOwner owner) {
+    fun onResume(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_PAUSE)
-    void onPause(LifecycleOwner owner) {
+    fun onPause(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_DESTROY)
-    void onDestory(LifecycleOwner owner) {
+    fun onDestory(owner: LifecycleOwner?) {
     }
-
 
     @OnLifecycleEvent(Lifecycle.Event.ON_ANY)
-    void onAny(LifecycleOwner owner) {
+    fun onAny(owner: LifecycleOwner?) {
     }
 
-    @NonNull
-    @Override
-    public Lifecycle getLifecycle() {
-        return mLifecycleRegistry;
-    }
+    override val lifecycle: Lifecycle = mLifecycleRegistry
 }

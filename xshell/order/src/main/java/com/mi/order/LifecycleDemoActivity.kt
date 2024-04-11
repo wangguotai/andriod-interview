@@ -22,7 +22,7 @@ class LifecycleDemoActivity :
     BaseActivity<LayoutLifecycleDemoBinding, IGoodsView, GoodsPresenter<IGoodsView>>() {
 
 
-    var listView: ListView? = null
+    private var listView: ListView? = null
 
 
     override fun onCreate(savedInstanceState: Bundle?) {

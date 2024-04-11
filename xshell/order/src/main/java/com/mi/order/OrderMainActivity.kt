@@ -30,7 +30,9 @@ class OrderMainActivity : AppCompatActivity() {
         ParameterManager.getInstance().loadParameter(this)
     }
 
-    fun jumpApp(view: View) {}
+    fun jumpApp(view: View) {
+        startActivity(Intent(this, LifecycleDemoActivity::class.java))
+    }
     fun jumpLogin(view: View) {
         // 实现组件间的通信
         // 方法1. 类加载

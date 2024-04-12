@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.view.View
+import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
 import com.mi.common.router.RecordPathManager
 import com.mi.mrouter_api.manager.ParameterManager
@@ -28,11 +29,12 @@ class OrderMainActivity : AppCompatActivity() {
         Log.d(OrderMainActivity::class.java.simpleName, "$name, $age")
         // ARouter.inject的过程
         ParameterManager.getInstance().loadParameter(this)
+        findViewById<Button>(R.id.btn_LifecycleActivity).setOnClickListener {
+            startActivity(Intent(this@OrderMainActivity, LifecycleDemoActivity::class.java))
+        }
     }
 
-    fun jumpApp(view: View) {
-        startActivity(Intent(this, LifecycleDemoActivity::class.java))
-    }
+
     fun jumpLogin(view: View) {
         // 实现组件间的通信
         // 方法1. 类加载

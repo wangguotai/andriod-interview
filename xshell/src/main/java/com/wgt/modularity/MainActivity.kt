@@ -9,6 +9,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.xshell.BuildConfig
 import com.example.xshell.R
 import com.mi.login.LoginMainActivity
+import com.mi.mrouter_api.manager.RouterManager
 import com.mi.order.OrderMainActivity
 import com.mi.router_annotation.MRouter
 
@@ -54,5 +55,10 @@ class MainActivity : AppCompatActivity() {
         intent.putExtra("name", "Derry")
         startActivity(intent)
 //        val startClass = `OrderMainActivity$$MRouter`.findTargetClass("/order/OrderMainActivity")
+    }
+
+    fun jumpLifecycleDemo(view: View) {
+        RouterManager.build("/order/LifecycleDemoActivity")
+            .navigation(this)
     }
 }

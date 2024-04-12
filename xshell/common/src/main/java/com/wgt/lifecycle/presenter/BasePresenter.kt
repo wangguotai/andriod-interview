@@ -1,8 +1,8 @@
 package com.wgt.lifecycle.presenter
 
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleObserver
 import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.OnLifecycleEvent
 import com.wgt.lifecycle.presenter.interf.view.IBaseView
 import java.lang.ref.WeakReference
@@ -12,8 +12,7 @@ import java.lang.ref.WeakReference
  * Author: wgt
  * Description:
  */
-open class BasePresenter<T : IBaseView> : LifecycleOwner {
-    private val mLifecycleRegistry = LifecycleRegistry(this)
+open class BasePresenter<T : IBaseView> : LifecycleObserver {
     var baseView: WeakReference<T>? = null
     fun attachView(view: T) {
         baseView = WeakReference(view)
@@ -30,7 +29,7 @@ open class BasePresenter<T : IBaseView> : LifecycleOwner {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_CREATE)
-    protected open fun onCreateX(owner: LifecycleOwner?) {
+    protected open fun onCreate(owner: LifecycleOwner?) {
     }
 
     @OnLifecycleEvent(Lifecycle.Event.ON_START)
@@ -56,6 +55,4 @@ open class BasePresenter<T : IBaseView> : LifecycleOwner {
     @OnLifecycleEvent(Lifecycle.Event.ON_ANY)
     protected fun onAny(owner: LifecycleOwner?) {
     }
-
-    override val lifecycle: Lifecycle = mLifecycleRegistry
 }

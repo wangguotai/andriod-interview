@@ -52,6 +52,6 @@ class LifecycleDemoActivity :
 
     override fun init() {
         super.init()
-//        lifecycle.addObserver(presenter as LifecycleObserver)
+        lifecycle.addObserver(presenter)
     }
 }

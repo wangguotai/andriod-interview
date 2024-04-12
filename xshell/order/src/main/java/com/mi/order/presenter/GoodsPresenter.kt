@@ -27,8 +27,8 @@ class GoodsPresenter<T : IGoodsView> : BasePresenter<T>() {
         }
     }
 
-    override fun onCreateX(owner: LifecycleOwner?) {
-        super.onCreateX(owner)
+    override fun onCreate(owner: LifecycleOwner?) {
+        super.onCreate(owner)
         Log.i("jett", "create")
     }
 

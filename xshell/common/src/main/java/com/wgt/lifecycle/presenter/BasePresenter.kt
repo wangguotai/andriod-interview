@@ -15,7 +15,7 @@ import java.lang.ref.WeakReference
 open class BasePresenter<T : IBaseView> : LifecycleOwner {
     private val mLifecycleRegistry = LifecycleRegistry(this)
     var baseView: WeakReference<T>? = null
-    protected fun attachView(view: T) {
+    fun attachView(view: T) {
         baseView = WeakReference(view)
     }
 

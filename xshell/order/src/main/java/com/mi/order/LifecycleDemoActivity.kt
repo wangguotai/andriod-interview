@@ -3,7 +3,6 @@ package com.mi.order
 import android.os.Bundle
 import android.util.Log
 import android.widget.ListView
-import androidx.lifecycle.LifecycleObserver
 import com.mi.order.adapter.GoodsAdapter
 import com.mi.order.bean.Goods
 import com.mi.order.databinding.LayoutLifecycleDemoBinding
@@ -20,7 +19,7 @@ import com.wgt.base.BaseActivity
  */
 @MRouter(path = "/order/LifecycleDemoActivity")
 class LifecycleDemoActivity :
-    BaseActivity<LayoutLifecycleDemoBinding, IGoodsView, GoodsPresenter<IGoodsView>>() {
+    BaseActivity<LayoutLifecycleDemoBinding, IGoodsView, GoodsPresenter<IGoodsView>>(), IGoodsView {
 
 
     private var listView: ListView? = null
@@ -30,6 +29,7 @@ class LifecycleDemoActivity :
         super.onCreate(savedInstanceState)
         listView = binding.listView
         presenter.fetch()
+
         LiveDataBus.getInstance().with("list", ArrayList::class.java)
             .observe(this) { arrayList ->
                 if (arrayList != null) {
@@ -44,14 +44,14 @@ class LifecycleDemoActivity :
 
     override fun getLayoutId(): Int = R.layout.layout_lifecycle_demo
 
-    fun showGoodsView(goods: List<Goods?>?) {
+    override fun showGoodsView(goods: List<Goods?>?) {
         listView!!.adapter = GoodsAdapter(this, goods)
     }
 
-    fun showErrorMessage(msg: String?) {}
+    override fun showErrorMessage(msg: String?) {}
 
     override fun init() {
         super.init()
-        lifecycle.addObserver(presenter as LifecycleObserver)
+//        lifecycle.addObserver(presenter as LifecycleObserver)
     }
 }

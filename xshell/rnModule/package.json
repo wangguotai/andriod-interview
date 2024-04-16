@@ -1,0 +1,15 @@
+{
+  "name": "rnmodule",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "npm react-native start"
+  },
+  "author": "wgt",
+  "license": "ISC",
+  "dependencies": {
+    "react-native": "^0.71.18"
+  }
+}

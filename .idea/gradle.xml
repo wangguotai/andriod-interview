@@ -19,6 +19,7 @@
             <option value="$PROJECT_DIR$/xshell/mrouter-api" />
             <option value="$PROJECT_DIR$/xshell/mrouter-compiler" />
             <option value="$PROJECT_DIR$/xshell/order" />
+            <option value="$PROJECT_DIR$/xshell/rnCommon" />
           </set>
         </option>
         <option name="resolveExternalAnnotations" value="false" />

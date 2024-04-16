@@ -6,6 +6,7 @@
       <module name="My_Application.xshell.compiler.main" target="1.8" />
       <module name="My_Application.xshell.compiler.test" target="1.8" />
       <module name="My_Application.xshell.mylibrary" target="17" />
+      <module name="My_Application.xshell.rnCommonModule" target="17" />
     </bytecodeTargetLevel>
   </component>
 </project>

@@ -44,5 +44,7 @@ dependencies {
     implementation libs.org.jetbrains.kotlinx.coroutines.core
     //依赖当前平台所对应的平台库
     implementation libs.org.jetbrains.kotlinx.coroutines.android
+
+    implementation libs.com.squareup.okhttp3
     api(project(":xshell:mrouter-annotations"))
 }

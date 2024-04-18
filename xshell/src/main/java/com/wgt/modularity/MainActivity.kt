@@ -8,10 +8,10 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.example.xshell.BuildConfig
 import com.example.xshell.R
-import com.mi.login.LoginMainActivity
 import com.mi.mrouter_api.manager.RouterManager
 import com.mi.order.OrderMainActivity
 import com.mi.router_annotation.MRouter
+import com.wgt.network.NetworkRequest
 
 @MRouter(path = "/xshell/MainActivity")
 class MainActivity : AppCompatActivity() {
@@ -41,9 +41,10 @@ class MainActivity : AppCompatActivity() {
 
     // app ---> 登录
     fun jumpLogin(view: View?) {
-        val intent = Intent(this, LoginMainActivity::class.java)
-        intent.putExtra("name", "Derry")
-        startActivity(intent)
+        NetworkRequest.getInstance().get()
+//        val intent = Intent(this, LoginMainActivity::class.java)
+//        intent.putExtra("name", "Derry")
+//        startActivity(intent)
     }
 
     // app ---> Order订单

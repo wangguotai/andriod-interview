@@ -1,7 +1,5 @@
 package com.wgt.anr;
 
-import android.annotation.TargetApi;
-import android.os.Build;
 import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
@@ -35,7 +33,6 @@ public class ANRWatchDog extends Thread {
         this.anrListener = listener;
     }
 
-    @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
     @Override
     public void run() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_BACKGROUND); // 设置为后台线程

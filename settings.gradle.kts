@@ -1,14 +1,19 @@
 pluginManagement {
     repositories {
+        maven("https://maven.aliyun.com/repository/google")
+        maven("https://maven.aliyun.com/repository/public")
+//        maven ("https://maven.aliyun.com/repository/central")
         maven("https://maven.aliyun.com/repository/gradle-plugin")
-        google {
-            content {
-                includeGroupByRegex("com\\.android.*")
-                includeGroupByRegex("com\\.google.*")
-                includeGroupByRegex("androidx.*")
-            }
-        }
-        mavenCentral()
+        // 国内无法使用google源，使用上面的阿里云镜像替代
+//        google {
+//            content {
+//                includeGroupByRegex("com\\.android.*")
+//                includeGroupByRegex("com\\.google.*")
+//                includeGroupByRegex("androidx.*")
+//            }
+//        }
+        google()
+//        mavenCentral()
         gradlePluginPortal()
     }
 }

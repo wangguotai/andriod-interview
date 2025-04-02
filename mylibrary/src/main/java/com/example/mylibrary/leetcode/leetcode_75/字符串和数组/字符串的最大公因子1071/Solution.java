@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.字符串的最大公因子1071;
+package com.example.mylibrary.leetcode.leetcode_75.字符串和数组.字符串的最大公因子1071;
 
 /**
  * Time: 2025/3/31

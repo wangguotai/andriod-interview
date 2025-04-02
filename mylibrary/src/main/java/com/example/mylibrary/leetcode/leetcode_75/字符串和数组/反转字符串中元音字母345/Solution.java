@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.反转字符串中元音字母345;
+package com.example.mylibrary.leetcode.leetcode_75.字符串和数组.反转字符串中元音字母345;
 
 import java.util.Arrays;
 import java.util.List;

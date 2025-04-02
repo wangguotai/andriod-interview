@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.反转字符串中的单词151;
+package com.example.mylibrary.leetcode.leetcode_75.字符串和数组.反转字符串中的单词151;
 
 import java.util.Deque;
 import java.util.LinkedList;

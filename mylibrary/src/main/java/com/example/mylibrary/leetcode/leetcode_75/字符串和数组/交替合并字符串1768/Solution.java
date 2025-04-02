@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.交替合并字符串1768;
+package com.example.mylibrary.leetcode.leetcode_75.字符串和数组.交替合并字符串1768;
 
 /**
  * Time: 2025/3/31

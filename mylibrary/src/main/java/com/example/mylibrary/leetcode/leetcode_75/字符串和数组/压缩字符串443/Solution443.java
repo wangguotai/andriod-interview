@@ -26,12 +26,14 @@ public class Solution443 {
     }
 
     public int compress(char[] chars) {
-        int len = chars.length;
+
+        final int[] len = {chars.length};
         int lIndex = 0;
         char curr = chars[0];
         int count = 1;
-        for (int i = 1; i <= len; i++) {
-            if (i < len && chars[i] == curr) {
+
+        for (int i = 1; i <= len[0]; i++) {
+            if (i < len[0] && chars[i] == curr) {
                 count++;
             } else {
                 chars[lIndex++] = curr;
@@ -45,7 +47,7 @@ public class Solution443 {
                         chars[lIndex++] = stack.pop();
                     }
                 }
-                if (i < len) {
+                if (i < len[0]) {
                     curr = chars[i];
                 }
                 count = 1;

@@ -3,7 +3,7 @@ import Observer from "./Observer";
 /**
  * 封装基础订阅器
  */
-class Subscription {
+export default class Subscription {
   // 观察者对象
   observers: Set<Observer> = new Set();
 

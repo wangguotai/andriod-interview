@@ -1,0 +1,1 @@
+export type MObject = { [key: string]: any };

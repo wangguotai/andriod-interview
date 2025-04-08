@@ -29,9 +29,8 @@ class EventDataCenter {
     const subscription = new CustomSubscription(originPageId);
     this.subscriptions.set(currentPageId, subscription);
     // 设置当前激活的订阅器
-    this.changeActivePageId(originPageId);
-    // 设置当前激活的 pageId
-    this.activePageId = originPageId;
+    this.changeActivePageId(currentPageId);
+    
     return currentPageId;
   }
 
@@ -66,7 +65,8 @@ class EventDataCenter {
     }
   }
   /* 暴露的更新方法 */
-  dispatchAction(payload: MObject, ...arg: Array<any>) {
+  dispatchAction( ...args: Array<any>) {
+    const [payload, arg] = args;
     this.model?.setModelData(payload);
     /* 先改变订阅器的状态 */
     this.changeSubscriptionStatus();
@@ -82,6 +82,10 @@ export function destroySubscription(pageID: string){
     }
 }
 
+/**
+ * 取消当前订阅器
+ * @param pageId 
+ */
 export function unActiveSubscription(){
     eventDataCenter && eventDataCenter.changeActivePageId(null);    
 }
@@ -97,3 +101,53 @@ export function activeSubscription(activePageId: string){
         eventDataCenter.notifyActiveSubscription();
     }
 }
+
+/**
+ * 创建事件通信中心
+ * @returns 
+ */
+export function createEventDataCenter(originPageId: string){
+  if(!eventDataCenter){
+      eventDataCenter = new EventDataCenter()
+  }
+  const currentPageId = eventDataCenter.initSubscription(originPageId)
+  return currentPageId
+}
+
+// ============================对外API==================================
+/**
+ * 用于组件或者页面订阅更新
+ * @param cb 回调函数
+ * @param selector 类似于react-redux 的 selector 用于优化性能
+ */
+export function subscribe(cb: Function, selector: Function) {
+  if (eventDataCenter && eventDataCenter.currentSubscription) {
+     eventDataCenter.currentSubscription.subscribe(cb, selector);
+  } else {
+    throw new Error("请按规范使用customPage创建页面");
+  } 
+}
+
+/**
+ * 获取状态
+ * @param key 状态key 
+ * @returns 
+ */
+export function getModelData(key: string) {
+  if (eventDataCenter && eventDataCenter.model) {
+    return eventDataCenter.model.getModelData(key);
+  } else {
+    throw new Error("请按规范使用customPage创建页面");
+  }
+}
+
+export function dispatch(...arg: Array<any>) {
+  if (eventDataCenter) {
+    eventDataCenter.dispatchAction(arg);
+  } else {
+    throw new Error("请按规范使用customPage创建页面");
+  }
+}
+
+
+// =========================END[对外API]================================

@@ -1,0 +1,15 @@
+{
+  "pages": [
+    "pages/entry/index",
+    "pages/havanalogin/index",
+    "pages/webview/index",
+    "pages/fullCashier/fullCashier"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#F4F4F4",
+    "backgroundTextStyle": "light",
+    "navigationBarTitleText": "微信小程序收银台",
+    "navigationBarTextStyle": "black"
+  },
+  "sitemapLocation": "sitemap.json"
+}

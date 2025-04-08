@@ -1,7 +1,0 @@
-<view class="container" wx:if="{{canIUse}}">
-  <web-view src="{{pageUrl}}">
-    <cover-view class="cover-view" bindtap="handleTap" wx:if="{{isShowBackBtn}}">
-      点击返回
-    </cover-view>
-  </web-view>
-</view>

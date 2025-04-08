@@ -1,8 +1,0 @@
-{
-	"usingComponents": {
-		"cashier": "../../components/index/cashier"
-	},
-	"navigationStyle": "custom",
-	"navigationBarTitleText": "购买会员",
-	"navigationBarTextStyle": "white"
-}

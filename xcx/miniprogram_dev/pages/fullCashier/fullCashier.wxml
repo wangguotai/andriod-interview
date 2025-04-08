@@ -1,3 +1,0 @@
-<view>
-    <cashier cashierInfo="{{cashierInfo}}" isShowCashier="{{isShowCashier}}" bind:onClose="closeHalfCashier"/>
-</view>

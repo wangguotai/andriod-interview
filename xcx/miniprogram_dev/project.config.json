@@ -44,7 +44,8 @@
         "showES6CompileOption": false,
         "useCompilerPlugins": false,
         "lazyloadPlaceholderEnable": false,
-        "useApiHostProcess": true
+        "useApiHostProcess": true,
+        "typescriptSupport": true
     },
     "compileType": "miniprogram",
     "libVersion": "3.7.5",

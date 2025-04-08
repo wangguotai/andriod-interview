@@ -1,4 +1,6 @@
 <view>
-    <view>页面A</view>
+    <view>组件{{pageType}}</view>
+    <button bind:tap="addCart">加购</button>
+    <text>count: {{count}}</text>
     
 </view>

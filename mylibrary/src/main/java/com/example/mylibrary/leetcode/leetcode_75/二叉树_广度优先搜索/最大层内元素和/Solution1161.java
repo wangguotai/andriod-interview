@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.二叉树.广度优先搜索.最大层内元素和;
+package com.example.mylibrary.leetcode.leetcode_75.二叉树_广度优先搜索.最大层内元素和;
 
 import com.example.mylibrary.leetcode.二叉树.TreeNode;
 

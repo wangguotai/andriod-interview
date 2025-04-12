@@ -1,4 +1,4 @@
-package com.example.mylibrary.leetcode.leetcode_75.二叉树.广度优先搜索.二叉树的右视图;
+package com.example.mylibrary.leetcode.leetcode_75.二叉树_广度优先搜索.二叉树的右视图;
 
 import com.example.mylibrary.leetcode.二叉树.TreeNode;
 

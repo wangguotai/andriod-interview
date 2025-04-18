@@ -8,6 +8,7 @@ public class Solution215 {
             swap(nums,0, i);
             maxHeapify(nums, 0, i);
         }
+        return nums[0];
     }
 
     private void buildMaxHeap(int[] nums, int heapSize) {

@@ -1,35 +1,37 @@
-package com.example.mylibrary.leetcode.京东;
+package com.example.mylibrary.leetcode.京东
 
-import java.util.HashMap;
-import java.util.Map;
+import kotlin.math.max
 
-public class SolutionLCR016 {
-    public int lengthOfLongestSubstring(String s) {
-        int n = s.length();
-        Map<Character, Integer> map = new HashMap<>();
-        int left =0, right = 0;
-        int longest = 0;
-        while(right < n) {
-            char ch = s.charAt(right);
-            if(!map.containsKey(ch)){
-                map.put(ch, right);
-                longest = Math.max(longest,map.size());
-
+class SolutionLCR016 {
+    fun lengthOfLongestSubstring(s: String): Int {
+        val n = s.length
+        val map: MutableMap<Char?, Int?> = HashMap<Char?, Int?>()
+        var left = 0
+        var right = 0
+        var longest = 0
+        while (right < n) {
+            val ch = s.get(right)
+            if (!map.containsKey(ch)) {
+                map.put(ch, right)
+                longest = max(longest, map.size)
             } else {
-                int newLeft = map.get(ch);
-                while(left < newLeft){
-                    map.remove(s.charAt(left++));
+                val newLeft: Int = map.get(ch)!!
+                while (left < newLeft) {
+                    map.remove(s.get(left++))
                 }
-                map.put(ch, right);
-                left++;
+                map.put(ch, right)
+                left++
             }
-            right++;
+            right++
         }
-        return Math.max(longest, map.size());
+        return max(longest, map.size)
     }
 
-    public static void main(String[] args) {
-        SolutionLCR016 solutionLCR016 = new SolutionLCR016();
-        solutionLCR016.lengthOfLongestSubstring("cdd");
+    companion object {
+        @JvmStatic
+        fun main(args: Array<String>) {
+            val solutionLCR016 = SolutionLCR016()
+            solutionLCR016.lengthOfLongestSubstring("cdd")
+        }
     }
 }

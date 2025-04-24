@@ -3,7 +3,7 @@ package com.interview.liveData
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
-class LiveData<T> {
+class LiveDataMoc<T> {
     private val observers = CopyOnWriteArrayList<(T) -> Unit>()
     private var value: T? = null
 
@@ -27,7 +27,7 @@ class LiveData<T> {
 
 fun main() {
     // 创建LiveData实例
-    val liveData = LiveData<Int>()
+    val liveData = LiveDataMoc<Int>()
     // 观察LiveData
     liveData.observe {
         println("Observer 1: $it")

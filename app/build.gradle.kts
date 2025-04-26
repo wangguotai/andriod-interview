@@ -68,9 +68,9 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.fragment)
     // 核心LiveData库 (必需)
-    implementation( "androidx.lifecycle:lifecycle-livedata:2.6.1")
+    implementation( libs.androidx.lifecycle.livedata)
     // Kotlin扩展 (推荐)
-    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.6.1")
-
+    implementation(libs.androidx.lifecycle.livedata.ktx)
+    testImplementation(libs.kotlinx.coroutines.test)
 
 }

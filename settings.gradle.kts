@@ -31,7 +31,6 @@ dependencyResolutionManagement {
 
 rootProject.name = "My Application"
 include(":app")
-//include(":mylibrary")
 include(":scroll-event-demo")
 include(":xshell")
 include(":xshell:login")

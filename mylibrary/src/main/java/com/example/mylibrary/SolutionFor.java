@@ -28,7 +28,7 @@ import java.util.List;
  *
  * * 1 <= nums.length <= 100
  * * 0 <= nums[i] <= 400
- *
+ *1
  */
 
 class Solution1 {

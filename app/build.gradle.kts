@@ -73,4 +73,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.livedata.ktx)
     testImplementation(libs.kotlinx.coroutines.test)
 
+    // retrofit
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0") // GSON转换器
+    // 可选扩展库
+    implementation("com.squareup.retrofit2:adapter-rxjava3:2.9.0")  // RxJava支持
+    implementation("com.squareup.okhttp3:logging-interceptor:2.9.0") // 网络日志
 }

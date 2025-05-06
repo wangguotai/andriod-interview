@@ -37,7 +37,7 @@ dependencies {
     testImplementation libs.junit
     androidTestImplementation libs.androidx.junit
     androidTestImplementation libs.androidx.espresso.core
-
+    api project(':xshell:common')
     implementation "com.facebook.react:react-native:+"
     implementation "org.webkit:android-jsc:+"
 }

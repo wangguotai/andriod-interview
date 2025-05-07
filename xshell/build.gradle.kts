@@ -4,7 +4,7 @@ plugins {
     alias(libs.plugins.jetbrainsKotlinAndroid)
     id("kotlin-kapt")
 }
-println("build xshell module")
+println("WGT TEST ==== build xshell module ++++")
 
 // 从配置文件中获取全局的配置信息
 val appID: Map<String, String> by extra

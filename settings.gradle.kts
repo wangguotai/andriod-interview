@@ -1,5 +1,7 @@
-
+println("Gradle版本: ${gradle.gradleVersion}")
+println("可用扩展: ${gradle.extensions.extensionsSchema}")
 pluginManagement {
+    includeBuild("./xshell/rn-root/node_modules/@react-native/gradle-plugin")
     repositories {
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/public")
@@ -17,6 +19,20 @@ pluginManagement {
 //        mavenCentral()
         gradlePluginPortal()
     }
+
+}
+plugins {
+    id("com.facebook.react.settings")
+}
+
+println("WGT === TEST ===")
+val myRnFile = settings.layout.rootDirectory.dir("./xshell/rn-root").asFile
+
+extensions.configure<com.facebook.react.ReactSettingsExtension> {
+
+    println(myRnFile)
+    autolinkLibrariesFromCommand(workingDirectory = myRnFile)
+//    autolinkLibrariesFromCommand()
 }
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
@@ -40,3 +56,4 @@ include(":xshell:mrouter-annotations")
 include(":xshell:mrouter-compiler")
 include(":xshell:mrouter-api")
 include(":xshell:rnCommon")
+includeBuild("./xshell/rn-root/node_modules/@react-native/gradle-plugin")

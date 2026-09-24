@@ -13,4 +13,11 @@
       <module name="react-native-gradle-plugin.test" target="11" />
     </bytecodeTargetLevel>
   </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="My_Application.xshell.mrouter-compiler" options="-proc:none" />
+      <module name="My_Application.xshell.mrouter-compiler.main" options="-proc:none" />
+      <module name="My_Application.xshell.mrouter-compiler.test" options="-proc:none" />
+    </option>
+  </component>
 </project>

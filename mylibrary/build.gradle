@@ -58,4 +58,5 @@ kotlin {
 dependencies {
     implementation("net.bramp.ffmpeg:ffmpeg:0.6.2") // FFmpeg封装库[6](@ref)
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3") // 协程支持
+    testImplementation("junit:junit:4.13.2") // ExampleUnitTest 依赖
 }

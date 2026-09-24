@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="24dp">
+
+    <TextView
+        android:id="@+id/tv_leak_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Handler 非静态内部类内存泄漏 Demo"
+        android:textSize="18sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tv_leak_desc"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:lineSpacingExtra="4dp"
+        android:text="步骤：\n1. 点击下方按钮投递一条 30s 延时消息\n2. 按返回键销毁本 Activity\n3. 观察 logcat（过滤 TAG: HandlerLeak）\n4. 若打印“Activity 仍存活 => 存在内存泄漏”，即复现成功" />
+
+    <Button
+        android:id="@+id/btn_send_leaky"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="投递泄漏消息（非静态内部类 Handler）" />
+
+    <Button
+        android:id="@+id/btn_send_fixed"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="投递安全消息（静态内部类 + WeakReference）" />
+
+    <TextView
+        android:id="@+id/tv_leak_result"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:textColor="#D32F2F"
+        android:textSize="15sp" />
+
+</LinearLayout>

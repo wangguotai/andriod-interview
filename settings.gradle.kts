@@ -2,6 +2,7 @@ println("Gradle版本: ${gradle.gradleVersion}")
 println("可用扩展: ${gradle.extensions.extensionsSchema}")
 pluginManagement {
     includeBuild("./xshell/rn-root/node_modules/@react-native/gradle-plugin")
+    includeBuild("./build-logic")
     repositories {
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/public")

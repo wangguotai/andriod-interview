@@ -77,6 +77,18 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name="com.interview.thread.ThreadGovernanceActivity"
+            android:exported="true"
+            android:label="线程治理 Demo"
+            android:theme="@style/Theme.MyApplication.AppCompat">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
     </application>
 
 </manifest>

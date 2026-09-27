@@ -1,6 +1,18 @@
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
+    id("com.interview.thread.monitor")
+}
+
+configure<com.interview.thread.plugin.ThreadMonitorExtension> {
+    enableNaming.set(true)
+    enableUnify.set(false)
+    excludedPackages.addAll(
+        "com.interview.thread.plugin.",
+        "com.interview.thread.UnifiedThread",
+        "com.interview.thread.ThreadPools",
+        "com.interview.thread.ThreadDefense",
+    )
 }
 
 android {
@@ -44,6 +56,15 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    ndkVersion = "25.1.8937393"
 }
 
 dependencies {

@@ -70,6 +70,7 @@ class HandlerLeakActivity : AppCompatActivity() {
         setContentView(R.layout.activity_handler_leak)
         mInfoText = findViewById(R.id.tv_leak_result)
 
+
         // 投递一条 30 秒后才处理的延时消息，保证退出 Activity 时消息仍在队列中
         findViewById<Button>(R.id.btn_send_leaky).setOnClickListener {
             mLeakyHandler.sendEmptyMessageDelayed(MSG_DELAYED, DELAY_MILLIS)

@@ -64,26 +64,42 @@ object ThreadPools {
      * 统一 ThreadFactory：
      * - 语义化命名：便于线程快照、Hook 回溯、线上问题定位
      * - daemon：不阻止 JVM 退出（Android 进程被回收时）
-     * - 优先级：Thread.setPriority 效果弱，真正影响调度的是
-     *   android.os.Process.setThreadPriority（会切换调度 cgroup）
+     * - 优先级：**单一路径**，只用 [Process.setThreadPriority]，避免两层各设一次
+     *
+     * ─── 为什么不再同时设 Thread.priority（实测结论，非推测）───
+     *
+     * Android 上 `Thread.setPriority` 与 `Process.setThreadPriority` 落到的是
+     * 同一个内核 nice，只是取值空间不同。实测映射（API 36 模拟器）：
+     *
+     *   Thread.setPriority(1..10)  →  nice 19,16,13,10,0,-2,-4,-5,-6,-8
+     *   Process.THREAD_PRIORITY_BACKGROUND(10) → nice 10
+     *
+     * 也就是说 `Thread.setPriority(4)` 与 `setThreadPriority(BACKGROUND)` 等价
+     * （都是 nice=10），同时设两遍是重复劳动，还会让 `Thread.getPriority()`
+     * 报出一个与内核不一致的数（实测：走 Process 路径时 getPriority() 仍是 5）。
+     *
+     * 选 Process 路径的原因：java 层够不到 niceness 的极端区间 ——
+     * java 最低只到 nice=-8，而 URGENT_AUDIO 需要 nice=-19。
+     * 统一用 Process 常量，语义更清晰、覆盖更全。
+     *
+     * ⚠️ 若日后需要niceness < -8（音频/实时），继续用本路径即可；
+     *    千万不要退回 Thread.setPriority —— 它表达不了。
      */
     class NamedThreadFactory(
         private val prefix: String,
         private val daemon: Boolean = true,
-        private val priority: Int = Thread.NORM_PRIORITY,
         private val androidPriority: Int = Process.THREAD_PRIORITY_DEFAULT,
     ) : ThreadFactory {
         private val counter = AtomicInteger(0)
 
         override fun newThread(r: Runnable): Thread =
             Thread({
-                // ⚠️ setThreadPriority 设置的是「当前线程」。在 newThread() 里调用
-                // 只会改到创建者线程，必须包一层、在新线程的 run 里设置。
+                // ⚠️ setThreadPriority 作用于「当前线程」，且必须在目标线程内调用：
+                // 在 newThread() 里直接调用只会改到创建者线程。
                 runCatching { Process.setThreadPriority(androidPriority) }
                 r.run()
             }, "$prefix-${counter.incrementAndGet()}").apply {
                 isDaemon = daemon
-                this.priority = priority
             }
     }
 
@@ -102,19 +118,17 @@ object ThreadPools {
         private val maxSize: Int,
         private val keepAliveSeconds: Long,
         val queueCapacity: Int,
-        threadPriority: Int,
+        /** 内核调度优先级（Process.THREAD_PRIORITY_*）。唯一优先级路径，见 NamedThreadFactory 注释 */
         androidPriority: Int,
         /** 单个调用方允许的在途任务上限，防止一个模块吃满整条泳道 */
         private val quotaPerCaller: Int,
     ) {
         private val queue = LinkedBlockingQueue<Runnable>(queueCapacity)
 
-        internal val queueRef: LinkedBlockingQueue<Runnable> get() = queue
-
         private val executor: ThreadPoolExecutor = ThreadPoolExecutor(
             coreSize, maxSize, keepAliveSeconds, TimeUnit.SECONDS,
             queue,
-            NamedThreadFactory("app-$name", priority = threadPriority, androidPriority = androidPriority),
+            NamedThreadFactory("app-$name", androidPriority = androidPriority),
         ).apply {
             allowCoreThreadTimeOut(true)
             // ⚠️ 不用 CallerRunsPolicy：泳道可以被主线程提交，饱和时让主线程
@@ -224,8 +238,7 @@ object ThreadPools {
     val network: Lane by lazy {
         Lane(
             name = "net", coreSize = 4, maxSize = 8, keepAliveSeconds = 60,
-            queueCapacity = 32, threadPriority = Thread.NORM_PRIORITY - 1,
-            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
+            queueCapacity = 32, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
         )
     }
 
@@ -233,8 +246,7 @@ object ThreadPools {
     val disk: Lane by lazy {
         Lane(
             name = "disk", coreSize = 2, maxSize = 4, keepAliveSeconds = 60,
-            queueCapacity = 16, threadPriority = Thread.NORM_PRIORITY - 1,
-            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 8,
+            queueCapacity = 16, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 8,
         )
     }
 
@@ -242,8 +254,7 @@ object ThreadPools {
     val dbWrite: Lane by lazy {
         Lane(
             name = "db", coreSize = 1, maxSize = 1, keepAliveSeconds = 30,
-            queueCapacity = 64, threadPriority = Thread.NORM_PRIORITY - 1,
-            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 64,
+            queueCapacity = 64, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 64,
         )
     }
 
@@ -251,8 +262,7 @@ object ThreadPools {
     val background: Lane by lazy {
         Lane(
             name = "bg", coreSize = 1, maxSize = 2, keepAliveSeconds = 30,
-            queueCapacity = 128, threadPriority = Thread.MIN_PRIORITY,
-            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 128,
+            queueCapacity = 128, androidPriority = Process.THREAD_PRIORITY_LOWEST, quotaPerCaller = 128,
         )
     }
 
@@ -292,8 +302,7 @@ object ThreadPools {
     val converged: Lane by lazy {
         Lane(
             name = "converged", coreSize = 2, maxSize = 8, keepAliveSeconds = 60,
-            queueCapacity = 128, threadPriority = Thread.NORM_PRIORITY - 1,
-            androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
+            queueCapacity = 128, androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
             // caller 恒为 asm-converged，配额无隔离意义，给足即可
             quotaPerCaller = 1024,
         )
@@ -325,7 +334,6 @@ object ThreadPools {
         Lane(
             name = "legacy-io", coreSize = 4, maxSize = 16, keepAliveSeconds = 60,
             queueCapacity = Int.MAX_VALUE, // ← 无界，导致 max 永不生效
-            threadPriority = Thread.NORM_PRIORITY - 1,
             androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
             quotaPerCaller = Int.MAX_VALUE,
         )

@@ -91,6 +91,10 @@ class ThreadGovernanceActivity : AppCompatActivity() {
                     "点「制造失控」后观察 TAG: ThreadHook 的计数")
         }
 
+        bind(R.id.btn_priority_diag) {
+            emit("【优先级设置对照】\n${ThreadPriorityDiagnostic.run()}")
+        }
+
         bind(R.id.btn_native_count) {
             emit("【Native Hook 统计】\n" +
                     "捕获到线程创建：${NativeThreadHook.nativeCreatedCount.get()} 次\n" +

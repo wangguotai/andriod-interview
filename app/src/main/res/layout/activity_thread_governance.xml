@@ -107,6 +107,13 @@
             android:text="4.Native Hook" />
 
         <Button
+            android:id="@+id/btn_priority_diag"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="优先级对照" />
+
+        <Button
             android:id="@+id/btn_native_count"
             android:layout_width="0dp"
             android:layout_height="wrap_content"

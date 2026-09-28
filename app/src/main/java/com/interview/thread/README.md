@@ -129,11 +129,38 @@ eMMC 机型的 λ 和 W 会同时变差。上表是保守起点，不是终点�
 现在改成 Abort，把背压显式抛回调用方（`execute` 返回 `false`），
 由调用方决定丢弃/降级/上报。
 
-**修正 3：优先级改用 `Process.setThreadPriority`。** 在 Android 上
-`Thread.setPriority(NORM_PRIORITY - 1)` 效果很弱；真正影响调度的是
-`android.os.Process.setThreadPriority`，它会切换调度 cgroup、影响 CPU 配额。
-⚠️ 有个陷阱：`setThreadPriority` 作用于**当前线程**，若在 `newThread()` 里调用
-只会改到创建者线程，必须包一层在新线程的 `run` 里设置。
+**修正 3：优先级只用一条路径：`Process.setThreadPriority`。**
+
+⚠️ 这一条我最初写错了，实测后更正 —— 原注释说「`Thread.setPriority` 效果弱、
+不设置内核 nice」是**错的**。Android 实测映射（API 36）：
+
+```
+Thread.setPriority(1..10) → nice 19,16,13,10,0,-2,-4,-5,-6,-8
+Process.THREAD_PRIORITY_BACKGROUND(10) → nice 10（即 java 4 的等价物）
+```
+
+`isAlive()==false` 时 Java 层确实不调 native（AOSP 源码如此），但 ART 在
+`Thread.start()` → `Thread_nativeCreate` 时会拿 `java.lang.Thread.priority`
+同步到内核。所以两条路径**落到的是同一个 nice**。
+
+同时使用两者不是「双保险」，而是有害的：
+
+- 语义重复，读者搞不清哪个生效
+- `Thread.getPriority()` 会报出与内核不一致的数（走 Process 路径时仍是 5）
+- **本项目实测到的真实 bug**：`bg` 泳道原本设了 `Thread.MIN_PRIORITY(1)`
+  → ART 映射 nice=19，但随后 `run()` 里的 `setThreadPriority(BACKGROUND)`
+  又把它覆盖成 nice=10，低优先级意图被静默丢失。修掉后实测 `app-bg-1 nice=19`。
+
+选 `Process` 路径的理由：java 层够不到 niceness 极端区间 —— java 最低只到
+**nice=-8**，而 `THREAD_PRIORITY_URGENT_AUDIO` 需要 **nice=-19**。
+
+⚠️ 陷阱：`setThreadPriority` 作用于**当前线程**，写在 `newThread()` 里只会
+改到创建者线程，必须包一层在新线程的 `run` 内设置。
+
+配套知识：`setThreadPriority` 的正数常量（如 BACKGROUND=10）会让线程让出 CPU，
+负数（如 URGENT_AUDIO=-19）提升优先级。**别在 ThreadFactory 里传超范围的值**，
+内核会直接拒绝。
+
 
 ### 可观测性
 
@@ -247,6 +274,7 @@ adb logcat -s ThreadDemo:D ThreadMonitor:D ThreadMisuse:D ThreadDefense:D Thread
 | 4.栈压缩对照 | 不同栈大小的创建成功率 |
 | 4.限流降级 | 超并发上限的拒绝行为 |
 | 4.Native Hook | 安装 pthread_create Hook |
+| 优先级对照 | `Thread.setPriority` vs `Process.setThreadPriority` 的内核 nice 实测 |
 | Hook 统计 | 查看 Native 捕获次数 |
 
 ## 构建说明

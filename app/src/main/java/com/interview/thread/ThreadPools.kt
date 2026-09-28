@@ -38,7 +38,7 @@ object ThreadPools {
 
         override fun newThread(r: Runnable): Thread = Thread(r, "$prefix-${counter.incrementAndGet()}").apply {
             isDaemon = daemon
-            this.priority = priority
+            this.priority = this@NamedThreadFactory.priority
         }
     }
 

@@ -101,6 +101,12 @@ class ThreadGovernanceActivity : AppCompatActivity() {
                     "被 ASM 收敛的线程：${UnifiedThread.convergedCount.get()} 次")
         }
 
+        bind(R.id.btn_calibration) {
+            emit("【泳道并发标定】开始扫描（约 1 分钟，请勿切后台）…\n" +
+                    "判据：吞吐平台起点 vs P99 劣化点，取较小者为 core 上界")
+            LaneCalibration.runAllAsync(this) { report -> emit(report) }
+        }
+
         bind(R.id.btn_clear) {
             log.setLength(0)
             emit("已清空")

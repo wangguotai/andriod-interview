@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 1. 队头阻塞：FIFO 队列里，排在前面的慢任务会拖住后面所有快任务。
  *    前面堵 4 个 30s 的文件扫描，后面 50ms 的配置请求一起等 30s。
- * 2. 下游资源异构：网络受带宽约束（并发收益递减）、磁盘随机 IO 队列深度低、
+ * 2. 下游资源异构：网络受带宽与 RTT 约束、磁盘受尾延迟（写放大/GC）约束、
  *    SQLite 是单写者。用一个并发数服务三种资源，对每种都是错的。
  * 3. 全局故障面：一个 SDK 失控提交慢任务，全 App 的 IO 一起瘫痪 ——
  *    等于在另一个层面重建了「线程滥用」本身。
@@ -36,20 +36,72 @@ import java.util.concurrent.atomic.AtomicLong
  * 所以：**治理能力（命名/配额/监控）收在入口层，执行能力按下游资源分道**。
  * 这正是四层方案里「收口」的本意 —— 收的是治理，不是物理池。
  *
- * ─── 泳道大小的依据（不是拍脑袋）───
+ * ─── 泳道大小的依据（要区分「推论」「惯例」「待实测」）───
  *
  * 不是「核数 × (1 + W/C)」—— 那是服务器追求 CPU 利用率最大化的公式，
- * 移动端的目标函数是「延迟 + 功耗」，故意不这么算。真实依据：
+ * 移动端的目标函数是「延迟 + 功耗」，故意不这么算。
  *
- *  net  移动端带宽是共享管道，加并发只是均分；射频 race-to-sleep 也要求
- *       集中突发。对齐 OkHttp maxRequestsPerHost=5 的惯例。
- *  disk 手机 UFS/eMMC 随机 IO 队列深度低，继续加并发只推高「所有」请求
- *       延迟，不增加吞吐。
+ * 定值问题不是「最多能开多少」，而是：
+ *   在排队延迟（P99）不劣化的前提下，让下游资源恰好跑满的**最小**并发。
+ *
+ *  net = 4 / 8
+ *    ① RTT 受限的小请求：吞吐 λ = n / (RTT + S/B)，W 几乎不随 n 变化，
+ *       所以 n=1→4 是**线性收益**（100ms RTT 的接口，4 并发把 4 次串行的
+ *       400ms 压到 ~100ms）。「加并发只是均分带宽」只对**带宽受限**的大文件
+ *       传输成立 —— 它给的是**上界**，给不出 4 这个值。
+ *    ② 上界由三件事压下来：per-host 连接池（OkHttp 默认 maxIdleConnections=5，
+ *       HTTP/1.1 下超出连接数的请求只能串行）、服务端风控（单 host 并发过高
+ *       会被 CDN/WAF 判异常）、每线程栈开销（泳道是跨域名的**全局**并发）。
+ *    ③ 射频 race-to-sleep：传输结束后射频不立刻回 IDLE，RRC inactivity 的
+ *       tail 是**秒级**高功耗窗口。但 tail 的**次数**取决于「请求间隔 vs
+ *       timer」，不取决于并行度 —— 并行只是把窗口从 Σw 缩到 max(w)。
+ *       真正治 tail 的是 **batching**（攒起来一次打完），不是加并发。
+ *    ④ 「对齐 OkHttp maxRequestsPerHost=5」是**惯例**，不是移动端推论，
+ *       而且它是 **per-host** 的。取 4 属于同量级对齐，别包装成推导。
+ *
+ *    ⚠️ 泳道并发 4 ≠ 网络并发 4。net 泳道的 4 个线程把请求交给 OkHttp，
+ *       OkHttp 自己还有 Dispatcher（maxRequests=64 / maxRequestsPerHost=5）
+ *       与连接池。两层是**叠乘**关系，不是同一层。
+ *
+ *  disk = 2 / 4
+ *    ① 旧注释写「UFS/eMMC 队列深度低」**不准确** —— 它把两种相反的形态并列了：
+ *         eMMC 4.4/4.5  单命令队列，主机侧无真正并行提交        → 依据成立
+ *         eMMC 5.1+     引入 CQ（队列深 32），入门机实现普遍很浅
+ *         UFS           SCSI-derived CQ，**理论队列深 32**，4K 随机读 IOPS
+ *                       从 QD1 到 QD32 有数倍提升              → 依据不成立
+ *    ② 那 2 还站得住吗？站得住，但理由在**软件栈**，不在设备 QD：
+ *         · 文件系统元数据路径（open/stat/readdir）在 dentry/inode 锁上串行，
+ *           这一段与块层并行度无关；
+ *         · 应用层磁盘任务大量是 CPU 密集（解析/解码），加线程只是抢 CPU；
+ *         · 随机**写**推高闪存 GC 与写放大，**P99 恶化远快于 P50**。
+ *    ③ 所以 disk 限流的首要目的是**保尾延迟**，与 net 同源；标定必须用
+ *       **随机读写混测** —— 顺序读会给出假的高拐点。
+ *
  *  db   SQLite 单写者（WAL 下亦然），线程数 >1 纯粹在 DB 锁上排队。
  *  bg   后台预取/上报，低优先级 + 大配额，可牺牲延迟换吞吐。
  *
- * 精确值应由 Little's Law 从**低端机实测**推出（并发数 = 到达率 λ × 任务
- * 时长 W），因为 eMMC 机型的 λ 和 W 会同时变差。这里的数字是保守起点。
+ * ─── 依据分级（完整表见 ../thread/README.md，别把这些混为一谈）───
+ *   硬（可推导）  RTT 受限下 n=1→4 的线性收益；带宽受限下 ~2-3 后吞吐不增
+ *   硬（有文献）  射频 tail 的收益来自**批次数**减少，支持 batching > 加并发
+ *   硬（前提成立）eMMC 4.4/4.5 无有效并行提交
+ *   惯例          OkHttp maxRequestsPerHost=5（且是 per-host）
+ *   ❌ 与事实相反  「UFS 队列深度低」
+ *   待实测        core=4/2、max=8/4 的具体取值
+ *
+ * ─── 队列容量与 max 的关系（本轮修正）───
+ * ThreadPoolExecutor 的语义是「先填 core → 再入队 → 队列满才扩到 max」。
+ * 旧配置 queueCapacity=32 时，net 要扩到 8 需已在途 4+32=36 个任务 ——
+ * 那时 waitP99 早已爆掉，max 只在**过载区**生效。这与「修正 1：让扩容条件
+ * 真正可达」自相矛盾（只是从「永不可达」变成「可达但无意义」）。
+ * 故把队列收窄到与 max 匹配：net 8 / disk 4 / db 16 / bg 32，
+ * 语义变成「稳态 core，超载借 max 并更早背压」。
+ *
+ * 精确值应由**并发扫描实测**标定（见 [LaneCalibration]）：扫 core=1..16，
+ * 取「吞吐曲线平台起点」与「waitP99 触及 SLO 的交点」中**较小者**。
+ * ⚠️ Little's Law 的 L=λW 给的是稳态在途数，**不能直接当并发配置** ——
+ *    你要的是满足 P99 的最小 n，这是个需要实测的拐点问题。
+ *    net 泳道的 W 本身依赖 n（带宽共享 + 服务端限流），是自反馈系统，无静态解；
+ *    且必须在**低端机 + 弱网**这一最坏组合下复测（eMMC 机型的 λ 与 W 同时变差）。
  */
 object ThreadPools {
 
@@ -234,19 +286,21 @@ object ThreadPools {
     // 四条泳道：执行隔离，互不拖累
     // ─────────────────────────────────────────────
 
-    /** 网络：受共享带宽约束，并发收益递减 */
+    /** 网络：RTT 受限下并发有线性收益，上界由 per-host 连接池与风控压住 */
     val network: Lane by lazy {
         Lane(
             name = "net", coreSize = 4, maxSize = 8, keepAliveSeconds = 60,
-            queueCapacity = 32, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
+            // 队列与 max 匹配：core 4 填满后，再有 8 个待处理就扩到 max=8；
+            // 取 32 会让扩容要等到在途 36，max 形同虚设（详见类注释）
+            queueCapacity = 8, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
         )
     }
 
-    /** 磁盘：随机 IO 队列深度低，加并发只推高延迟 */
+    /** 磁盘：瓶颈在文件系统元数据锁与闪存写放大，限流首要目的是保 P99 */
     val disk: Lane by lazy {
         Lane(
             name = "disk", coreSize = 2, maxSize = 4, keepAliveSeconds = 60,
-            queueCapacity = 16, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 8,
+            queueCapacity = 4, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 8,
         )
     }
 
@@ -254,7 +308,7 @@ object ThreadPools {
     val dbWrite: Lane by lazy {
         Lane(
             name = "db", coreSize = 1, maxSize = 1, keepAliveSeconds = 30,
-            queueCapacity = 64, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 64,
+            queueCapacity = 16, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 64,
         )
     }
 
@@ -262,7 +316,7 @@ object ThreadPools {
     val background: Lane by lazy {
         Lane(
             name = "bg", coreSize = 1, maxSize = 2, keepAliveSeconds = 30,
-            queueCapacity = 128, androidPriority = Process.THREAD_PRIORITY_LOWEST, quotaPerCaller = 128,
+            queueCapacity = 32, androidPriority = Process.THREAD_PRIORITY_LOWEST, quotaPerCaller = 128,
         )
     }
 
@@ -302,7 +356,7 @@ object ThreadPools {
     val converged: Lane by lazy {
         Lane(
             name = "converged", coreSize = 2, maxSize = 8, keepAliveSeconds = 60,
-            queueCapacity = 128, androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
+            queueCapacity = 32, androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
             // caller 恒为 asm-converged，配额无隔离意义，给足即可
             quotaPerCaller = 1024,
         )

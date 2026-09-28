@@ -8,6 +8,9 @@ import java.io.RandomAccessFile
 import java.util.Locale
 import java.util.Random
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.sqrt
 
@@ -293,7 +296,21 @@ object LaneCalibration {
     // 扫描与报告
     // ─────────────────────────────────────────────
 
-    private val driver = java.util.concurrent.Executors.newSingleThreadExecutor(
+    /**
+     * 扫描驱动：独占一个受治理的线程。
+     *
+     * 为什么用 `ThreadPoolExecutor` 而非 `Executors.newSingleThreadExecutor`：
+     * 后者虽等价，但绕过收口层、命名与优先级都不可控 —— 本仓库的 Lint 规则
+     * 正是拦这个（`ExecutorsThreadPool`）。
+     *
+     * 队列用有界 `LinkedBlockingQueue(4)` 而非 `SynchronousQueue`：重复点按钮时
+     * 多余任务排队等待，而不是直接拒绝。
+     * ⚠️ 绝不能用 `CallerRunsPolicy` —— 调用方是 UI 线程，饱和时会让主线程
+     * 去跑几十秒的扫描，直接 ANR（这正是 README 里批评过的写法）。
+     */
+    private val driver = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.SECONDS,
+        LinkedBlockingQueue(4),
         ThreadPools.NamedThreadFactory("app-calib-driver"),
     )
 

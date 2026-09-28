@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  线程治理 Lint 规则的**豁免清单**。
+
+  ─── 为什么必须显式建这个文件 ───
+
+  规则（thread-lint 模块，optional=false）会拦下所有 `new Thread` /
+  `Executors.newXxx` / `HandlerThread`。但本仓库有几处**必须**直接创建线程：
+
+    1. 收口层自身的实现（ThreadPools / UnifiedThread）—— 它就是那个"合法落点"
+    2. 反面教材（ThreadMisuseScenarios）—— 故意复现劣习，是本项目的演示素材
+    3. 需要裸线程才能达成的诊断（ThreadPriorityDiagnostic 测内核 nice）
+    4. 需要构造参数原生能力（ThreadDefense 的 stackSize）
+
+  这些用 `@Suppress` 也行，但**分散在代码里容易悄悄扩散**；集中到一个文件
+  反而更容易 review —— 任何新增豁免都必须改这里，diff 看得见。
+
+  ─── 使用纪律 ───
+
+  · 每一条豁免**必须写明理由**，不接受"先加上回头再说"
+  · 优先用 `@Suppress("...")` 做**行内**豁免（更小范围）；
+    只有整文件性质如此时才加到本文件
+  · 本文件不能成为"把规则关掉"的后门：新增豁免请在 PR 里单独说明
+-->
+<lint>
+
+    <!-- ═══════════════════════════════════════════
+         1. 收口层自身 —— 线程创建的唯一合法落点
+         ═══════════════════════════════════════════ -->
+
+    <!-- ThreadPools.NamedThreadFactory.newThread() 里必须 new Thread；
+         scheduled 池本身就是收口层的一部分 -->
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/ThreadPools.kt" />
+    </issue>
+    <issue id="ExecutorsThreadPool">
+        <ignore path="src/main/java/com/interview/thread/ThreadPools.kt" />
+    </issue>
+
+    <!-- 收敛层：由 ASM 把 new Thread 的 owner 替换成本类，
+         因此它必须继承 Thread 并实现全部构造签名 -->
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/UnifiedThread.kt" />
+    </issue>
+
+    <!-- 兜底层：压栈需要 Thread 构造的 stackSize 参数，泳道不提供这个能力 -->
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/ThreadDefense.kt" />
+    </issue>
+
+    <!-- 优先级诊断：要测内核 nice 的映射，必须持有**未经任何包装**的裸线程，
+         否则测到的是包装层的优先级而不是 Java/Process API 的真实映射 -->
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/ThreadPriorityDiagnostic.kt" />
+    </issue>
+
+    <!-- ═══════════════════════════════════════════
+         2. 反面教材 —— 故意复现劣习，是本项目的演示素材
+         ═══════════════════════════════════════════ -->
+
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/ThreadMisuseScenarios.kt" />
+    </issue>
+    <issue id="ExecutorsThreadPool">
+        <ignore path="src/main/java/com/interview/thread/ThreadMisuseScenarios.kt" />
+    </issue>
+    <issue id="HandlerThreadUsage">
+        <ignore path="src/main/java/com/interview/thread/ThreadMisuseScenarios.kt" />
+    </issue>
+
+    <!-- ═══════════════════════════════════════════
+         3. 已确认的技术债 —— **真违规**，规则判对了
+
+         这三处不是「合法豁免」，而是存量问题：com/interview/leak 是内存泄漏
+         demo 包，与本任务的线程治理无关，故本轮不修改代码范围。
+
+         它们被豁免的唯一理由是**控制改动扩散**，不是因为写法正确。
+         清理后请删除本节的条目 —— 留在这里的每一条都是可见的债。
+
+         · HandlerLeakActivity.kt:93/108  LeakChecker : Thread()
+           → 改法：LeakChecker 改为实现 Runnable，交 ThreadPools 执行
+         · LeakHelperDemo.kt:91           mWatchedThread（LockSupport.park 常驻）
+           → 改法：park 循环塞进共享泳道会永久占住一个线程，反而更糟。
+             需要收口层补一个「受治理的独占线程」出口（走 NamedThreadFactory
+             但不要队列与配额），再迁过来。
+         ═══════════════════════════════════════════ -->
+
+    <issue id="NewThreadUsage">
+        <ignore path="src/main/java/com/interview/leak/HandlerLeakActivity.kt" />
+        <ignore path="src/main/java/com/interview/leak/LeakHelperDemo.kt" />
+    </issue>
+
+</lint>

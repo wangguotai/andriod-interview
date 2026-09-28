@@ -1,0 +1,49 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}
+
+// lint-api 的最新版本 ↔ AGP 版本严格对齐：
+// AGP 8.3.x 对应 lint 31.3.x（AGP x.y → lint 31.(y) 的映射，实测校验见 README）
+// 用 compileOnly：规则模块不能把 lint-api 打进产物，运行时由 AGP 的 Lint 提供
+dependencies {
+    compileOnly "com.android.tools.lint:lint-api:31.3.0"
+    compileOnly "com.android.tools.lint:lint-checks:31.3.0"
+
+    testImplementation "com.android.tools.lint:lint:31.3.0"
+    testImplementation "com.android.tools.lint:lint-tests:31.3.0"
+    testImplementation "junit:junit:4.13.2"
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+test {
+    // lint 测试框架需要一个 Android SDK 来解析 android.os.HandlerThread 这类类型。
+    // 从 local.properties 读 sdk.dir（CI 上可改用环境变量 ANDROID_HOME）。
+    def sdkDir = null
+    def lp = rootProject.file("local.properties")
+    if (lp.exists()) {
+        Properties p = new Properties()
+        new FileInputStream(lp).withCloseable { stream -> p.load(stream) }
+        sdkDir = p.getProperty("sdk.dir")
+    }
+    if (sdkDir == null) {
+        sdkDir = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+    }
+    if (sdkDir != null) {
+        environment "ANDROID_HOME", sdkDir
+        environment "ANDROID_SDK_ROOT", sdkDir
+    }
+
+    testLogging {
+        events "failed"
+        exceptionFormat "full"
+    }
+}

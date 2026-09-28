@@ -65,9 +65,34 @@ android {
     }
 
     ndkVersion = "25.1.8937393"
+
+    lint {
+        // 豁免清单（收口层自身 / 反面教材 / 需要裸线程的诊断）
+        lintConfig = file("lint.xml")
+
+        // 线程治理规则强制为 error，不允许被降级为 warning
+        error += listOf("NewThreadUsage", "ExecutorsThreadPool", "HandlerThreadUsage")
+
+        xmlReport = true
+        htmlReport = true
+
+        // ─── CI 卡口模式 ───
+        // 本仓库存在与线程无关的既有 lint 债务（如 OnClick 回调缺失），
+        // 直接跑完整 lint 会让线程问题淹没在噪声里，卡口形同虚设。
+        // 用 -PthreadLintOnly 只跑线程规则，作为**可立即落地**的聚焦闸门：
+        //     ./gradlew :app:lintDebug -PthreadLintOnly
+        if (project.hasProperty("threadLintOnly")) {
+            checkOnly += listOf("NewThreadUsage", "ExecutorsThreadPool", "HandlerThreadUsage")
+        }
+    }
 }
 
 dependencies {
+
+    // 自定义 Lint 规则（NewThreadUsage / ExecutorsThreadPool / HandlerThreadUsage）
+    // 装在 lintChecks 上 → 随 lintDebug/lintRelease 执行，可卡在 CI
+    // Kotlin DSL 没有 lintChecks 顶层访问器，用 add() 形式
+    add("lintChecks", project(":thread-lint"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)

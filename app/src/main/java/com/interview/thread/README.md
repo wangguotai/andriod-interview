@@ -25,6 +25,14 @@ build-logic/thread-plugin/       第2/3步 ASM Gradle 插件（独立构建）
 ├── ThreadAsmVisitorFactory.kt   AGP AsmClassVisitorFactory 接入
 ├── ThreadClassVisitor.kt        指令级变换核心
 └── ThreadMonitorExtension.kt    配置项
+
+thread-lint/                     第1步 规范层门禁：自定义 Lint 规则
+├── ThreadMisuseDetector.kt      拦 new Thread / Executors.newXxx / HandlerThread
+├── ThreadLintIssueRegistry.kt   IssueRegistry（SPI 注册）
+└── src/test/…                   11 个用例，反例比正例多（误报控制）
+
+.github/workflows/
+└── thread-governance.yml        CI 卡口：规则单测 + 聚焦 lint 闸门
 ```
 
 ---
@@ -330,6 +338,153 @@ Process.THREAD_PRIORITY_BACKGROUND(10) → nice 10（即 java 4 的等价物）
 **`queueDepth` 才是「任务是否堆积」的直接证据**，`poolSize` 看不出来；
 `waitP99`（入队到开始执行的等待）比线程数更能反映真实压力。
 另外每条泳道有 `quotaPerCaller`，挡住「一个模块吃满整条泳道」。
+
+---
+
+## 规范层的强制手段：自定义 Lint 规则
+
+规范层（统一池收口）如果只写在文档里，就只是愿望。**code review 会漏、会疲劳、
+会被人情放过；Lint 不会。** 所以「禁止裸用 `new Thread`」必须是一个可执行的门禁。
+
+规则模块在 `thread-lint/`，挂在 `app` 的 `lintChecks` 上，随 `lintDebug` 执行。
+
+### 拦的三类写法
+
+| Issue ID | 拦截目标 |
+|---|---|
+| `NewThreadUsage` | `new Thread(...)`、`Thread(...)`、**自建 `Thread` 子类** |
+| `ExecutorsThreadPool` | `Executors.newFixedThreadPool` / `newCachedThreadPool` / `newSingleThreadExecutor` / `newScheduledThreadPool` / `newSingleThreadScheduledExecutor` / `newWorkStealingPool` |
+| `HandlerThreadUsage` | `android.os.HandlerThread` |
+
+### 全链路（四步，缺一不可）
+
+```
+app/build.gradle.kts
+  add("lintChecks", project(":thread-lint"))                    ← ① 挂载
+        ↓
+thread-lint/build.gradle
+  compileOnly "com.android.tools.lint:lint-api:31.3.0"          ← ② 版本对齐 AGP
+        ↓
+src/main/resources/META-INF/services/
+  com.android.tools.lint.client.api.IssueRegistry               ← ③ SPI 注册
+        ↓
+ThreadLintIssueRegistry : IssueRegistry                         ← ④ 暴露规则
+        ↓
+ThreadMisuseDetector : Detector(), SourceCodeScanner            ← ⑤ 实际扫描
+```
+
+⚠️ **第 ③ 步漏了会「静默失效」**：构建照样绿，什么都不报，你以为规则在跑。
+这是本方案里最难查的失败模式。
+
+**版本对齐规律：`lint = AGP major + 23`** —— AGP 8.3 → lint 31.3。
+不对齐会 `NoSuchMethodError`。另注：`lint-api` 只在 `google()` 仓库有，
+阿里云镜像取不到（实测 404）。
+
+### 为什么用 UAST 而不是纯 PSI
+
+同一份规则必须同时覆盖 Java 与 Kotlin，而两者写法在 PSI 层完全不同：
+
+```kotlin
+Thread { println("x") }.start()   // Kotlin：尾部 lambda，长得像函数调用
+new Thread(() -> {}).start()      // Java：标准构造调用
+```
+
+UAST 把两者归一成 `UCallExpression`（`kind == CONSTRUCTOR_CALL`），
+所以一套逻辑覆盖两种语言：
+
+```kotlin
+override fun getApplicableUastTypes() = listOf(UCallExpression::class.java)
+
+override fun createUastHandler(context: JavaContext) = object : UElementHandler() {
+    override fun visitCallExpression(node: UCallExpression) {
+        when (node.kind) {
+            UastCallKind.CONSTRUCTOR_CALL -> checkConstructor(context, node)
+            UastCallKind.METHOD_CALL      -> checkMethodCall(context, node)
+        }
+    }
+}
+```
+
+> 不用 `getApplicableConstructorTypes()`：它更「声明式」，但在 Kotlin 的部分
+> 构造调用形态下触发不稳定。直接处理 `UCallExpression` 最可预期。
+
+### 误报控制：规则能活下来的前提
+
+**一个误报率高的规则会被团队整体关掉，比没有规则更糟。**
+所以测试里**反例比正例更重要**（`thread-lint/src/test/`，11 个用例，5 个是反例）：
+
+```kotlin
+Thread.sleep(100)                    // 静态方法，常用 API —— 不报
+Thread.currentThread()               // 同上 —— 不报
+Executors.defaultThreadFactory()     // 返回工厂不是池 —— 不报
+MyExecutors.newFixedThreadPool(4)    // 只认 FQN，不按方法名瞎报 —— 不报
+@Suppress("NewThreadUsage")          // 抑制机制必须有效 —— 不报
+```
+
+判断类型必须**认 FQN + 走父类链**（自建 `class MyThread : Thread()` 也要拦），
+并加深度上限防御循环继承。
+
+### CI 落地：为什么是「聚焦闸门」而不是完整 lint
+
+实测：完整 `lintDebug` 报 **27 个错误**，其中线程规则命中 26 处，但大多数是
+**合法豁免**（收口层自身、故意的反面教材）；另有与线程无关的存量债务。
+
+若把闸门定成「完整 lint 必须绿」，它**上线第一天就是红的**，然后被加
+`continue-on-error` 或干脆删掉 —— 这是绝大多数 lint 卡口的死法。
+
+所以用 `-PthreadLintOnly` 只跑三条线程规则，命中数 **26 → 3**，能立刻变绿：
+
+```bash
+./gradlew :app:lintDebug -PthreadLintOnly
+```
+
+**闸门有效性经过验证**（否则「绿色构建」有两种可能：规则正常，或规则失效）：
+
+```
+注入含违规的探针文件 → Lint found 2 errors，BUILD FAILED   ✅ 拦住了
+删除探针             → BUILD SUCCESSFUL                    ✅ 恢复
+```
+
+CI 配置见 `.github/workflows/thread-governance.yml`（先跑规则单测，再跑闸门）。
+
+### 豁免的三种手段
+
+| 手段 | 适用 | 本项目选择 |
+|---|---|---|
+| `@Suppress("...")` | 行内、单点 | 优先，范围最小 |
+| `lint.xml` 的 `<ignore path>` | 整文件性质如此 | ✅ 收口层/反面教材用它 —— 集中可 review，diff 可见 |
+| `lint-baseline.xml` | 存量债务快照 | 未用（快照容易遗忘） |
+
+豁免清单在 `app/lint.xml`，分三类：收口层自身、反面教材、**已确认的技术债**。
+每一条都写明理由 —— 新增豁免必须改这个文件，PR diff 里看得见。
+
+### 能力边界（主动说清）
+
+| 拦不住 | 原因 | 谁来兜底 |
+|---|---|---|
+| 三方 SDK 的线程创建 | 二进制依赖，Lint 看不到源码 | ASM 插桩（第 3 层）/ Native Hook（第 4 层）|
+| 反射创建线程 | 静态分析看不到运行时类型 | Hook |
+| 运行时的线程爆炸行为 | Lint 是**编译期**工具 | 监控层（第 2 层）|
+
+**分工：Lint 治「写得出源码的自有代码」，ASM 治「依赖里的 class」，
+Hook 治「运行时的行为」。三者互补，不是替代。**
+
+### 本仓库的四个真实踩坑
+
+1. **`HandlerThread` 继承自 `Thread`，判断顺序不能反。** 先判家族会被误分类成
+   `NewThreadUsage`。必须先判更具体的子类。这个 bug 是**测试抓出来的**。
+2. **`UElementHandler` 在 `com.android.tools.lint.client.api`**，不在
+   `org.jetbrains.uast` —— 名字像 UAST 的类，实际归 lint-api 管。
+3. **`LintDetectorTest` 继承 JUnit 3 的 `TestCase`**，Gradle 走 JUnit38 runner，
+   只认 `test` 前缀方法；用 Kotlin 反引号命名测试会报 "No tests found"。
+4. **Kotlin DSL 没有 `lintChecks` 顶层访问器**，要写
+   `add("lintChecks", project(":thread-lint"))`。
+
+### 「给出合法出口，违规才拦得住」
+
+一个结构性认识：如果收口层不提供某些必需能力，需要它的人只能去摸 `new Thread`
+然后加 `@Suppress`，规则就烂了。写规则时顺手把 `LaneCalibration` 改成走收口层
+（dogfooding），暴露了「独占线程」这个缺口。
 
 ---
 

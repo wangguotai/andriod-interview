@@ -66,6 +66,13 @@
         android:orientation="horizontal">
 
         <Button
+            android:id="@+id/btn_lane_isolation"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="1.泳道隔离对照" />
+
+        <Button
             android:id="@+id/btn_step4_stack"
             android:layout_width="0dp"
             android:layout_height="wrap_content"

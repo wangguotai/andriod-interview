@@ -1,83 +1,302 @@
 package com.interview.thread
 
 import android.os.Process
+import android.os.SystemClock
+import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.SynchronousQueue
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Time: 2026/9/27
  * Author: wgt
- * Description: 第 1 步「规范层」——全 App 统一线程池收口
+ * Description: 第 1 步「规范层」—— 全 App 统一线程池收口
  *
- * 设计要点：
- * 1. 所有业务线程池集中在此，禁止业务代码裸用 new Thread / Executors.newXxx
- * 2. 每个池都显式提供 ThreadFactory，做到「语义化命名 + daemon + 优先级」
- * 3. 线程命名是后续监控的前提：默认工厂产出的 pool-1-thread-1 / Thread-7
- *    在线上线程快照里根本无法定位来源
+ * ─── 设计：一个治理入口，四条隔离泳道 ───
+ *
+ * 为什么不「全 App 共用一个 IO 池」：
+ *
+ * 1. 队头阻塞：FIFO 队列里，排在前面的慢任务会拖住后面所有快任务。
+ *    前面堵 4 个 30s 的文件扫描，后面 50ms 的配置请求一起等 30s。
+ * 2. 下游资源异构：网络受带宽约束（并发收益递减）、磁盘随机 IO 队列深度低、
+ *    SQLite 是单写者。用一个并发数服务三种资源，对每种都是错的。
+ * 3. 全局故障面：一个 SDK 失控提交慢任务，全 App 的 IO 一起瘫痪 ——
+ *    等于在另一个层面重建了「线程滥用」本身。
+ *
+ * 所以：**治理能力（命名/配额/监控）收在入口层，执行能力按下游资源分道**。
+ * 这正是四层方案里「收口」的本意 —— 收的是治理，不是物理池。
+ *
+ * ─── 泳道大小的依据（不是拍脑袋）───
+ *
+ * 不是「核数 × (1 + W/C)」—— 那是服务器追求 CPU 利用率最大化的公式，
+ * 移动端的目标函数是「延迟 + 功耗」，故意不这么算。真实依据：
+ *
+ *  net  移动端带宽是共享管道，加并发只是均分；射频 race-to-sleep 也要求
+ *       集中突发。对齐 OkHttp maxRequestsPerHost=5 的惯例。
+ *  disk 手机 UFS/eMMC 随机 IO 队列深度低，继续加并发只推高「所有」请求
+ *       延迟，不增加吞吐。
+ *  db   SQLite 单写者（WAL 下亦然），线程数 >1 纯粹在 DB 锁上排队。
+ *  bg   后台预取/上报，低优先级 + 大配额，可牺牲延迟换吞吐。
+ *
+ * 精确值应由 Little's Law 从**低端机实测**推出（并发数 = 到达率 λ × 任务
+ * 时长 W），因为 eMMC 机型的 λ 和 W 会同时变差。这里的数字是保守起点。
  */
 object ThreadPools {
+
+    private const val TAG = "ThreadPools"
+    private const val DEMO_CALLER = "ThreadPools.demo"
+
+    // ─────────────────────────────────────────────
+    // ThreadFactory
+    // ─────────────────────────────────────────────
 
     /**
      * 统一 ThreadFactory：
      * - 语义化命名：便于线程快照、Hook 回溯、线上问题定位
      * - daemon：不阻止 JVM 退出（Android 进程被回收时）
-     * - 优先级：后台任务降优先级，减少对主线程调度的干扰
+     * - 优先级：Thread.setPriority 效果弱，真正影响调度的是
+     *   android.os.Process.setThreadPriority（会切换调度 cgroup）
      */
     class NamedThreadFactory(
         private val prefix: String,
         private val daemon: Boolean = true,
         private val priority: Int = Thread.NORM_PRIORITY,
+        private val androidPriority: Int = Process.THREAD_PRIORITY_DEFAULT,
     ) : ThreadFactory {
         private val counter = AtomicInteger(0)
 
-        override fun newThread(r: Runnable): Thread = Thread(r, "$prefix-${counter.incrementAndGet()}").apply {
-            isDaemon = daemon
-            this.priority = this@NamedThreadFactory.priority
-        }
+        override fun newThread(r: Runnable): Thread =
+            Thread({
+                // ⚠️ setThreadPriority 设置的是「当前线程」。在 newThread() 里调用
+                // 只会改到创建者线程，必须包一层、在新线程的 run 里设置。
+                runCatching { Process.setThreadPriority(androidPriority) }
+                r.run()
+            }, "$prefix-${counter.incrementAndGet()}").apply {
+                isDaemon = daemon
+                this.priority = priority
+            }
     }
 
-    /** IO 密集型：网络、文件、数据库。核心线程可回收，避免常驻占用。 */
-    val io: ThreadPoolExecutor by lazy {
-        ThreadPoolExecutor(
-            CORE_IO, MAX_IO, 60L, TimeUnit.SECONDS,
-            LinkedBlockingQueue(),
-            NamedThreadFactory("app-io", priority = Thread.NORM_PRIORITY - 1),
+    // ─────────────────────────────────────────────
+    // 泳道
+    // ─────────────────────────────────────────────
+
+    /**
+     * 泳道：一条隔离的执行通道，同时是「治理入口」。
+     *
+     * 承担：语义化命名、有界队列背压、调用方配额、可观测指标。
+     */
+    class Lane internal constructor(
+        val name: String,
+        private val coreSize: Int,
+        private val maxSize: Int,
+        private val keepAliveSeconds: Long,
+        val queueCapacity: Int,
+        threadPriority: Int,
+        androidPriority: Int,
+        /** 单个调用方允许的在途任务上限，防止一个模块吃满整条泳道 */
+        private val quotaPerCaller: Int,
+    ) {
+        private val queue = LinkedBlockingQueue<Runnable>(queueCapacity)
+
+        internal val queueRef: LinkedBlockingQueue<Runnable> get() = queue
+
+        private val executor: ThreadPoolExecutor = ThreadPoolExecutor(
+            coreSize, maxSize, keepAliveSeconds, TimeUnit.SECONDS,
+            queue,
+            NamedThreadFactory("app-$name", priority = threadPriority, androidPriority = androidPriority),
         ).apply {
             allowCoreThreadTimeOut(true)
-            // 线程创建失败时的兜底：降级为调用者线程执行，避免直接抛 OOM
-            rejectedExecutionHandler = ThreadPoolExecutor.CallerRunsPolicy()
+            // ⚠️ 不用 CallerRunsPolicy：泳道可以被主线程提交，饱和时让主线程
+            // 去跑 IO 任务 = 直接 ANR。改用 Abort，把背压显式抛回调用方，
+            // 由它决定丢弃 / 降级 / 上报。
+            rejectedExecutionHandler = ThreadPoolExecutor.AbortPolicy()
+        }
+
+        private val submittedCount = AtomicLong(0)
+        private val rejectedByQueue = AtomicLong(0)
+        private val rejectedByQuota = AtomicLong(0)
+        private val waitSamples = ConcurrentLinkedQueue<Long>()
+        private val inflight = ConcurrentHashMap<String, AtomicInteger>()
+
+        data class Metrics(
+            val name: String,
+            val core: Int,
+            val max: Int,
+            val poolSize: Int,
+            val active: Int,
+            val queueDepth: Int,
+            val queueCapacity: Int,
+            val submitted: Long,
+            val rejectedByQueue: Long,
+            val rejectedByQuota: Long,
+            /** 任务从入队到开始执行的 P99 等待耗时（毫秒） */
+            val waitP99Millis: Long,
+        ) {
+            val queueText: String
+                get() = if (queueCapacity == Int.MAX_VALUE) "无界" else "$queueDepth/$queueCapacity"
+        }
+
+        fun metrics(): Metrics {
+            val sorted = waitSamples.toList().sorted()
+            val p99 = if (sorted.isEmpty()) {
+                0L
+            } else {
+                sorted[(sorted.size * 99 / 100).coerceAtMost(sorted.size - 1)]
+            }
+            return Metrics(
+                name = name,
+                core = coreSize,
+                max = maxSize,
+                poolSize = executor.poolSize,
+                active = executor.activeCount,
+                queueDepth = queue.size,
+                queueCapacity = queueCapacity,
+                submitted = submittedCount.get(),
+                rejectedByQueue = rejectedByQueue.get(),
+                rejectedByQuota = rejectedByQuota.get(),
+                waitP99Millis = p99 / 1_000_000,
+            )
+        }
+
+        /**
+         * 提交任务。返回 false 表示被拒绝（配额超限或队列已满），调用方需自行降级。
+         *
+         * @param caller 调用方标识（模块/SDK 名），用于配额与归因
+         */
+        fun execute(caller: String, task: Runnable): Boolean {
+            // 1) 调用方配额：挡住「一个模块吃满一条泳道」
+            val counter = inflight.computeIfAbsent(caller) { AtomicInteger() }
+            if (counter.get() >= quotaPerCaller) {
+                rejectedByQuota.incrementAndGet()
+                Log.w(TAG, "[$name] 配额拒绝：caller=$caller 在途=${counter.get()}/$quotaPerCaller")
+                return false
+            }
+            counter.incrementAndGet()
+            submittedCount.incrementAndGet()
+            val enqueuedAt = System.nanoTime()
+            return try {
+                executor.execute {
+                    recordWait(System.nanoTime() - enqueuedAt)
+                    try {
+                        task.run()
+                    } finally {
+                        counter.decrementAndGet()
+                    }
+                }
+                true
+            } catch (e: RejectedExecutionException) {
+                // 2) 队列满：有界队列带来的背压，在此显式返回给调用方
+                counter.decrementAndGet()
+                rejectedByQueue.incrementAndGet()
+                Log.w(TAG, "[$name] 队列拒绝：caller=$caller 队列已满 $queueCapacity")
+                false
+            }
+        }
+
+        fun queueDepth(): Int = queue.size
+
+        private fun recordWait(nanos: Long) {
+            waitSamples.add(nanos)
+            while (waitSamples.size > WAIT_SAMPLE_LIMIT) waitSamples.poll()
+        }
+
+        private companion object {
+            const val WAIT_SAMPLE_LIMIT = 256
         }
     }
 
-    /** CPU 密集型：计算。核心数 = 核数 ± 1，超出只会增加上下文切换损耗。 */
+    // ─────────────────────────────────────────────
+    // 四条泳道：执行隔离，互不拖累
+    // ─────────────────────────────────────────────
+
+    /** 网络：受共享带宽约束，并发收益递减 */
+    val network: Lane by lazy {
+        Lane(
+            name = "net", coreSize = 4, maxSize = 8, keepAliveSeconds = 60,
+            queueCapacity = 32, threadPriority = Thread.NORM_PRIORITY - 1,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
+        )
+    }
+
+    /** 磁盘：随机 IO 队列深度低，加并发只推高延迟 */
+    val disk: Lane by lazy {
+        Lane(
+            name = "disk", coreSize = 2, maxSize = 4, keepAliveSeconds = 60,
+            queueCapacity = 16, threadPriority = Thread.NORM_PRIORITY - 1,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 8,
+        )
+    }
+
+    /** DB 写：SQLite 单写者，>1 只是在锁上排队 */
+    val dbWrite: Lane by lazy {
+        Lane(
+            name = "db", coreSize = 1, maxSize = 1, keepAliveSeconds = 30,
+            queueCapacity = 64, threadPriority = Thread.NORM_PRIORITY - 1,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 64,
+        )
+    }
+
+    /** 后台：预取/清理/上报，低优先级，可牺牲延迟 */
+    val background: Lane by lazy {
+        Lane(
+            name = "bg", coreSize = 1, maxSize = 2, keepAliveSeconds = 30,
+            queueCapacity = 128, threadPriority = Thread.MIN_PRIORITY,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 128,
+        )
+    }
+
+    // ─────────────────────────────────────────────
+    // 非 IO 型池
+    // ─────────────────────────────────────────────
+
+    private const val CPU_QUEUE_CAPACITY = 64
+
+    /** CPU 密集型：计算。有界队列形成背压。 */
     val cpu: ThreadPoolExecutor by lazy {
         ThreadPoolExecutor(
             CORE_CPU, CORE_CPU, 30L, TimeUnit.SECONDS,
-            LinkedBlockingQueue(),
+            LinkedBlockingQueue(CPU_QUEUE_CAPACITY),
             NamedThreadFactory("app-cpu"),
-        ).apply {
-            allowCoreThreadTimeOut(true)
-        }
+        )
     }
 
     /** 串行任务：需要保证顺序的场景。 */
     val single: ThreadPoolExecutor by lazy {
         ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS,
-            LinkedBlockingQueue(),
+            LinkedBlockingQueue(128),
             NamedThreadFactory("app-single"),
         )
     }
 
     /** 定时 / 延时任务。 */
     val scheduled: ScheduledExecutorService by lazy {
-        Executors.newScheduledThreadPool(2, NamedThreadFactory("app-scheduled"))
+        Executors.newScheduledThreadPool(
+            2,
+            NamedThreadFactory("app-scheduled", androidPriority = Process.THREAD_PRIORITY_BACKGROUND),
+        )
+    }
+
+    /** 收敛池：ASM 把 new Thread 收敛后的最终落点 */
+    val converged: Lane by lazy {
+        Lane(
+            name = "converged", coreSize = 2, maxSize = 8, keepAliveSeconds = 60,
+            queueCapacity = 128, threadPriority = Thread.NORM_PRIORITY - 1,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
+            // caller 恒为 asm-converged，配额无隔离意义，给足即可
+            quotaPerCaller = 1024,
+        )
     }
 
     /**
@@ -92,30 +311,126 @@ object ThreadPools {
         )
     }
 
-    /** 收敛池：ASM 把 new Thread 收敛后的最终落点 */
-    val converged: ThreadPoolExecutor by lazy {
-        ThreadPoolExecutor(
-            2, 8, 60L, TimeUnit.SECONDS,
-            LinkedBlockingQueue(),
-            NamedThreadFactory("app-converged", priority = Thread.NORM_PRIORITY - 1),
-        ).apply {
-            allowCoreThreadTimeOut(true)
-            rejectedExecutionHandler = ThreadPoolExecutor.CallerRunsPolicy()
-        }
+    /**
+     * ⚠️ 反面教材（仅供对照实验）：重构前的「全 App 单一 IO 池」。
+     *
+     * 它浓缩了旧设计的两处硬伤：
+     * 1. `maximumPoolSize = 16` 是死配置 —— 队列无界（Integer.MAX_VALUE），
+     *    execute() 第 3 步「队列满才扩容」永不成立，实际并发上限恒为 core = 4。
+     * 2. 单一 FIFO 队列 → 慢任务队头阻塞快任务。
+     *
+     * 用 [demoLaneIsolation] 可把这两点量化出来。
+     */
+    val legacyShared: Lane by lazy {
+        Lane(
+            name = "legacy-io", coreSize = 4, maxSize = 16, keepAliveSeconds = 60,
+            queueCapacity = Int.MAX_VALUE, // ← 无界，导致 max 永不生效
+            threadPriority = Thread.NORM_PRIORITY - 1,
+            androidPriority = Process.THREAD_PRIORITY_BACKGROUND,
+            quotaPerCaller = Int.MAX_VALUE,
+        )
     }
 
-    private val CORE_IO = 4
-    private val MAX_IO = 16
     private val CORE_CPU = maxOf(2, Runtime.getRuntime().availableProcessors() - 1)
 
-    /** 供 Demo 展示：当前各统一池的配置概览。 */
+    // ─────────────────────────────────────────────
+    // 对照实验
+    // ─────────────────────────────────────────────
+
+    /**
+     * 对照实验：慢任务队头阻塞。
+     *
+     * 同一批任务（4 个 800ms 磁盘任务 + 1 个 20ms 网络任务），分别在
+     * 「单一池」和「泳道」下执行，测量网络任务从提交到开始执行的等待时间。
+     */
+    fun demoLaneIsolation(): String {
+        val slowMillis = 800L
+        val slowCount = 4
+        val sb = StringBuilder()
+        sb.appendLine("场景：先提交 $slowCount 个 ${slowMillis}ms 的磁盘任务，")
+        sb.appendLine("      再提交 1 个 20ms 网络任务，观察网络任务的等待时间")
+        sb.appendLine()
+
+        val legacyWait = measureHeadOfLineBlocking(legacyShared, slowCount, slowMillis)
+        sb.appendLine("A. 单一 IO 池（core=4 max=16 无界队列）")
+        sb.appendLine("   网络任务等待 = ${legacyWait}ms  ← 被 $slowCount 个慢任务堵住")
+        sb.appendLine("   注：max=16 不会救场，无界队列使扩容条件永不成立")
+        sb.appendLine()
+
+        val laneWait = measureHeadOfLineBlocking(null, slowCount, slowMillis)
+        sb.appendLine("B. 泳道隔离（disk 泳道跑慢任务，net 泳道跑网络任务）")
+        sb.appendLine("   网络任务等待 = ${laneWait}ms  ← 网络泳道空闲，立即执行")
+        sb.appendLine()
+
+        sb.appendLine("结论：并发上限相同（4 vs 4），但泳道把「无关任务互相拖累」消灭了。")
+        Log.i(TAG, "泳道隔离对照：单一池=${legacyWait}ms 泳道=${laneWait}ms")
+        return sb.toString()
+    }
+
+    /**
+     * @param sharedLane 非空时用该池执行全部任务（模拟旧设计）；
+     *                   为空时慢任务走 [disk]、快任务走 [network]（泳道隔离）
+     */
+    private fun measureHeadOfLineBlocking(
+        sharedLane: Lane?,
+        slowCount: Int,
+        slowMillis: Long,
+    ): Long {
+        val start = SystemClock.elapsedRealtime()
+        val netStartedAt = AtomicLong(-1)
+        val latch = CountDownLatch(slowCount + 1)
+
+        val slowTask = {
+            Thread.sleep(slowMillis)
+            latch.countDown()
+        }
+        repeat(slowCount) {
+            if (sharedLane != null) sharedLane.execute(DEMO_CALLER, slowTask)
+            else disk.execute(DEMO_CALLER, slowTask)
+        }
+
+        val netTask = Runnable {
+            netStartedAt.set(SystemClock.elapsedRealtime() - start)
+            Thread.sleep(20)
+            latch.countDown()
+        }
+        if (sharedLane != null) sharedLane.execute(DEMO_CALLER, netTask)
+        else network.execute(DEMO_CALLER, netTask)
+
+        latch.await(10, TimeUnit.SECONDS)
+        return netStartedAt.get().coerceAtLeast(0)
+    }
+
+    // ─────────────────────────────────────────────
+    // 概览
+    // ─────────────────────────────────────────────
+
+    /** 供 Demo 展示：当前各池的配置与实时指标概览。 */
     fun describe(): String = buildString {
         appendLine("当前设备 CPU 核数：${Runtime.getRuntime().availableProcessors()}")
-        appendLine("io        core=${io.corePoolSize} max=${io.maximumPoolSize}  实际=${io.poolSize}")
-        appendLine("cpu       core=${cpu.corePoolSize} max=${cpu.maximumPoolSize}  实际=${cpu.poolSize}")
-        appendLine("single    core=1  实际=${single.poolSize}")
+        appendLine()
+        appendLine("── 泳道（按下游资源隔离）──")
+        listOf(network, disk, dbWrite, background).forEach { appendLine(formatLane(it)) }
+        appendLine()
+        appendLine("── 其他池 ──")
+        appendLine("cpu       core=${cpu.corePoolSize} max=${cpu.maximumPoolSize} 实际=${cpu.poolSize} 队列=${cpu.queue.size}/$CPU_QUEUE_CAPACITY")
+        appendLine("single    实际=${single.poolSize} 队列=${single.queue.size}/128")
         appendLine("scheduled 实际=${(scheduled as ThreadPoolExecutor).poolSize}")
-        appendLine("converged 实际=${converged.poolSize}")
-        appendLine("unnamed   实际=${unnamed.poolSize}")
+        appendLine("unnamed   实际=${unnamed.poolSize}（对照用，默认命名）")
+        appendLine()
+        appendLine("── 反面教材（重构前）──")
+        appendLine(formatLane(legacyShared))
+        appendLine()
+        appendLine("说明：queueDepth 是「任务是否堆积」的直接证据；")
+        appendLine("waitP99 是任务从入队到开始执行的等待耗时，比 poolSize 更能反映真实压力。")
+    }
+
+    private fun formatLane(lane: Lane): String {
+        val m = lane.metrics()
+        return "%-9s core=%d max=%d 实际=%d 活跃=%d 队列=%-11s 提交=%d 拒绝(队列/配额)=%d/%d waitP99=%dms"
+            .format(
+                m.name, m.core, m.max, m.poolSize, m.active, m.queueText,
+                m.submitted, m.rejectedByQueue, m.rejectedByQuota, m.waitP99Millis,
+            )
     }
 }

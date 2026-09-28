@@ -82,9 +82,13 @@ class UnifiedThread : Thread {
         Log.d(TAG, "收敛成功：[$originalName] 由「新建线程」改为「提交统一池 app-converged」")
         convergedCount.incrementAndGet()
         try {
-            ThreadPools.converged.execute(r)
+            val accepted = ThreadPools.converged.execute(CALLER, r)
+            if (!accepted) {
+                // 泳道饱和：原地执行，保证业务不中断（收敛层是「尽力而为」的优化）
+                Log.w(TAG, "收敛池饱和，降级原地执行：[$originalName]")
+                r.run()
+            }
         } catch (e: Throwable) {
-            // 兜底：统一池不可用时降级为原地执行，保持业务不中断
             Log.e(TAG, "提交统一池失败，降级原地执行", e)
             r.run()
         }
@@ -92,6 +96,9 @@ class UnifiedThread : Thread {
 
     companion object {
         private const val TAG = "UnifiedThread"
+
+        /** 归因用：ASM 收敛的线程统一归到这个 caller 名下 */
+        private const val CALLER = "asm-converged"
 
         /** 统计被收敛的线程总数，供 Demo 展示 */
         val convergedCount = AtomicInteger(0)

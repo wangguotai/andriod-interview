@@ -20,6 +20,9 @@ object ThreadDefense {
 
     private const val TAG = "ThreadDefense"
 
+    /** 归因用：限流器提交到后台泳道的 caller 标识 */
+    private const val CALLER = "ThreadDefense.limiter"
+
     /** PTHREAD_STACK_MIN 在多数架构是 16KB，留足余量避免栈溢出 */
     const val STACK_TINY = 64 * 1024L
     const val STACK_SMALL = 256 * 1024L
@@ -87,17 +90,18 @@ object ThreadDefense {
                 return false
             }
             active.incrementAndGet()
-            try {
-                ThreadPools.io.execute {
-                    try {
-                        task.run()
-                    } finally {
-                        active.decrementAndGet()
-                    }
+            val accepted = ThreadPools.background.execute(CALLER) {
+                try {
+                    task.run()
+                } finally {
+                    active.decrementAndGet()
                 }
-            } catch (e: Throwable) {
+            }
+            if (!accepted) {
+                // 泳道队列满：交由限流器自身语义处理（视为拒绝，让上层降级）
                 active.decrementAndGet()
-                throw e
+                Log.w(TAG, "限流命中：泳道队列已满，拒绝任务 [$taskName]")
+                return false
             }
             return true
         }

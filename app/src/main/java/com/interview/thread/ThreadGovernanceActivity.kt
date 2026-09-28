@@ -49,16 +49,20 @@ class ThreadGovernanceActivity : AppCompatActivity() {
             // 对照实验：分别用统一池和默认工厂池执行任务，比对命名率
             val latch = CountDownLatch(6)
             repeat(6) {
-                ThreadPools.io.execute { sleepQuietly(1500); latch.countDown() }
+                ThreadPools.background.execute("demo.naming") { sleepQuietly(1500); latch.countDown() }
                 ThreadPools.unnamed.execute { sleepQuietly(1500); latch.countDown() }
             }
             latch.await(3, TimeUnit.SECONDS)
             val snap = ThreadMonitor.snapshot()
             emit("【第2步】命名率对照\n" +
-                    "统一池线程名形如 app-io-N（可溯源）\n" +
+                    "统一池线程名形如 app-bg-N（可溯源）\n" +
                     "默认工厂线程名形如 pool-N-thread-M（不可溯源）\n\n" +
                     "当前不可溯源占比：${"%.1f".format(snap.defaultNamedRatio * 100)}%\n" +
                     snap.formatTop(15))
+        }
+
+        bind(R.id.btn_lane_isolation) {
+            emit("【第1步 泳道隔离对照】\n${ThreadPools.demoLaneIsolation()}")
         }
 
         bind(R.id.btn_step4_stack) {

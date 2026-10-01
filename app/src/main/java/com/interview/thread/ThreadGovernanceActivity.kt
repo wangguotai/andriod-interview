@@ -96,9 +96,19 @@ class ThreadGovernanceActivity : AppCompatActivity() {
         }
 
         bind(R.id.btn_native_count) {
-            emit("【Native Hook 统计】\n" +
-                    "捕获到线程创建：${NativeThreadHook.nativeCreatedCount.get()} 次\n" +
-                    "被 ASM 收敛的线程：${UnifiedThread.convergedCount.get()} 次")
+            val sites = NativeThreadHook.creationSitesSnapshot(12)
+            emit(buildString {
+                appendLine("【Native Hook 统计】")
+                appendLine("捕获到线程创建：${NativeThreadHook.nativeCreatedCount.get()} 次")
+                appendLine("  ├ 来自 Java 线程：${NativeThreadHook.fromJavaCount.get()} 次（可溯源）")
+                appendLine("  └ 来自 Native 线程：${NativeThreadHook.fromNativeCount.get()} 次（无 Java 栈）")
+                appendLine("被 ASM 收敛的线程：${UnifiedThread.convergedCount.get()} 次")
+                if (sites.isNotEmpty()) {
+                    appendLine()
+                    appendLine("── 线程创建者分布（谁在造线程）──")
+                    sites.forEach { (site, n) -> appendLine("  ×$n  $site") }
+                }
+            })
         }
 
         bind(R.id.btn_calibration) {

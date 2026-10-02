@@ -127,6 +127,33 @@
         android:orientation="horizontal">
 
         <Button
+            android:id="@+id/btn_native_enforce"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Hook 降级" />
+
+        <Button
+            android:id="@+id/btn_native_reject"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Hook 拒绝⚠" />
+
+        <Button
+            android:id="@+id/btn_native_raw"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Hook 关闭" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
             android:id="@+id/btn_calibration"
             android:layout_width="0dp"
             android:layout_height="wrap_content"

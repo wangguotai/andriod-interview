@@ -95,6 +95,55 @@ class ThreadGovernanceActivity : AppCompatActivity() {
             emit("【优先级设置对照】\n${ThreadPriorityDiagnostic.run()}")
         }
 
+        bind(R.id.btn_native_enforce) {
+            NativeThreadHook.applyStackShrinkPolicy()
+            emit(
+                "【Hook 降级已开启】策略：ThreadMisuseScenarios.* → DEMOTE（压栈）\n\n" +
+                        "实测得到的**关键边界**（本 Demo 验证过）：\n" +
+                        "  ❌ 在 pthread 入口 setpriority 设 nice 无效 ——\n" +
+                        "     ART 在 Java 线程 run() 时重新应用 Java priority，\n" +
+                        "     把它覆盖回 0。探针证据：设置后回读 10，\n" +
+                        "     但业务真跑起来时 /proc 里是 0。\n" +
+                        "  ✅ 改 pthread_attr 的栈大小有效 ——\n" +
+                        "     栈在 pthread_create 时就 mmap 定死，ART 改不了。\n\n" +
+                        "结论：治内存（栈）交给 native；\n" +
+                        "      治调度（优先级）必须留给 Java 层 ThreadFactory。\n\n" +
+                        "点「制造失控」，看下方日志的「栈 1040KB → 256KB」。"
+            )
+        }
+
+        bind(R.id.btn_native_reject) {
+            // 危险演示：故意拒绝，观察调用方拿到什么
+            NativeThreadHook.rules = listOf(
+                NativeThreadHook.Rule(
+                    "com.interview.thread.ThreadMisuseScenarios.bareUnnamedThreads",
+                    NativeThreadHook.Action.REJECT
+                ),
+                NativeThreadHook.Rule(
+                    "com.interview.thread.ThreadMisuseScenarios",
+                    NativeThreadHook.Action.DEMOTE
+                ),
+                NativeThreadHook.Rule("", NativeThreadHook.Action.ALLOW),
+            )
+            NativeThreadHook.enforceEnabled = true
+            NativeThreadHook.reset()
+            emit(
+                "【危险演示：拒绝创建】bareUnnamedThreads → REJECT\n" +
+                        "点「制造失控」后注意：\n" +
+                        "  · 第 1 个线程被拒 → ART 抛 OutOfMemoryError\n" +
+                        "  · 该异常会中断 launchAll()，后续场景不再执行\n" +
+                        "  · logcat 可见 “pthread_create (1040KB stack) failed: Try again”\n\n" +
+                        "结论：拒绝是「核选项」，仅在极端场景（如已 OOM 边缘）慎用。"
+            )
+        }
+
+        bind(R.id.btn_native_raw) {
+            NativeThreadHook.enforceEnabled = false
+            NativeThreadHook.rules = listOf(NativeThreadHook.Rule("", NativeThreadHook.Action.ALLOW))
+            NativeThreadHook.reset()
+            emit("【Hook 治理已关闭】恢复纯观测（全部放行）。\n再点「制造失控」即对照组：线程正常大量创建。")
+        }
+
         bind(R.id.btn_native_count) {
             val sites = NativeThreadHook.creationSitesSnapshot(12)
             emit(buildString {
@@ -103,6 +152,12 @@ class ThreadGovernanceActivity : AppCompatActivity() {
                 appendLine("  ├ 来自 Java 线程：${NativeThreadHook.fromJavaCount.get()} 次（可溯源）")
                 appendLine("  └ 来自 Native 线程：${NativeThreadHook.fromNativeCount.get()} 次（无 Java 栈）")
                 appendLine("被 ASM 收敛的线程：${UnifiedThread.convergedCount.get()} 次")
+                appendLine()
+                appendLine("── 治理决策 ──")
+                appendLine("  放行 ${NativeThreadHook.allowCount.get()} / " +
+                        "降级 ${NativeThreadHook.demoteCount.get()} / " +
+                        "拒绝 ${NativeThreadHook.rejectCount.get()}")
+                appendLine("  策略状态：${if (NativeThreadHook.enforceEnabled) "已开启" else "仅观测"}")
                 if (sites.isNotEmpty()) {
                     appendLine()
                     appendLine("── 线程创建者分布（谁在造线程）──")

@@ -160,6 +160,85 @@ object NativeThreadHook {
         Log.d(TAG, "捕获线程创建 #$count [${if (isFromJava) "Java" else "Native"}] $site")
     }
 
+    // ═══════════════════════════════════════════════════════════
+    // 治理策略：决策留在 Java（可配置、可热更新、好测试），
+    // 执行放在 native（只有那里能改 attr、能拒绝创建）。
+    // ═══════════════════════════════════════════════════════════
+
+    /** 治理动作 */
+    enum class Action(val code: Int) {
+        ALLOW(0),   // 放行
+        DEMOTE(1),  // 放行但降级（压低优先级）
+        REJECT(2),  // 拒绝创建
+    }
+
+    /** 按调用点前缀匹配的策略规则 */
+    data class Rule(val callerPrefix: String, val action: Action)
+
+    /**
+     * 策略表。前缀匹配，**第一条命中即生效**，务必以空前缀的兜底规则结尾。
+     *
+     * ⚠️ 默认全部 ALLOW —— 治理机制自身的默认姿态必须是「不干预」，
+     * 否则一旦策略写错会直接搞崩接入的 SDK。
+     * 生产上的正确节奏：先只观测一段时间 → 用真实数据定策略 → 再逐步加码。
+     */
+    @Volatile
+    var rules: List<Rule> = listOf(Rule("", Action.ALLOW))
+
+    /** 是否真正执行策略（默认关：只观测不动手，便于先收集数据） */
+    @Volatile
+    var enforceEnabled: Boolean = false
+
+    /** 决策次数统计 */
+    val allowCount = AtomicInteger(0)
+    val demoteCount = AtomicInteger(0)
+    val rejectCount = AtomicInteger(0)
+
+    /**
+     * 演示「Hook 降级」。
+     *
+     * 实测结论（本 Demo 踩过并验证）：
+     *  - ❌ 在 pthread 入口 setpriority 设 nice **无效**：ART 在 Java 线程
+     *    run() 时会重新应用 Java 层 priority，把它覆盖回 0。
+     *    探针证据：设置后立刻回读是 10，但业务真正跑起来时 /proc 里是 0。
+     *  - ✅ 同一点改 pthread_attr 的栈大小**有效**：栈在 pthread_create 时
+     *    就 mmap 定死，ART 改不了。这才是 native 层稳定可用的控制手段。
+     *
+     * 结论：治内存（栈）交给 native，治调度（优先级）必须留给 Java 层。
+     */
+    fun applyStackShrinkPolicy() {
+        rules = listOf(
+            Rule("com.interview.thread.ThreadMisuseScenarios", Action.DEMOTE),
+            Rule("", Action.ALLOW),
+        )
+        enforceEnabled = true
+        reset()
+    }
+
+    /**
+     * 供 native 调用的策略查询回调。
+     *
+     * ⚠️ 本方法在 Hook 点被**同步**调用，必须极快返回。
+     * 只做前缀匹配（几条规则），绝不在这里做 IO / 抓堆栈 / 打日志。
+     *
+     * @return 0=放行 1=降级 2=拒绝
+     */
+    @JvmStatic
+    fun onThreadCreateRequested(callerSite: String): Int {
+        if (!enforceEnabled) {
+            allowCount.incrementAndGet()
+            return Action.ALLOW.code
+        }
+        val action = rules.firstOrNull { callerSite.startsWith(it.callerPrefix) }?.action
+            ?: Action.ALLOW
+        when (action) {
+            Action.ALLOW -> allowCount.incrementAndGet()
+            Action.DEMOTE -> demoteCount.incrementAndGet()
+            Action.REJECT -> rejectCount.incrementAndGet()
+        }
+        return action.code
+    }
+
     private external fun installNative()
     private external fun uninstallNative()
 }

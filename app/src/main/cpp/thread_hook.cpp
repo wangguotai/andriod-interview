@@ -68,6 +68,9 @@
 #include <stdlib.h>     // 通用工具函数声明
 #include <stdio.h>      // snprintf，格式化字符串
 #include <sys/prctl.h>  // prctl(PR_GET_NAME)：读线程名，API 24 可用
+#include <sys/resource.h> // setpriority：给新创建的线程设 nice
+#include <time.h>       // clock_gettime：速率限制的时间基准
+#include <errno.h>      // EAGAIN 等错误码
 #include <sys/mman.h>   // mprotect，修改内存页读写权限
 #include <elf.h>        // ELF 结构体：ElfW(Dyn) / ElfW(Sym) / ElfW(Rela) 等
 #include <link.h>       // struct dl_phdr_info、dl_iterate_phdr 的声明
@@ -155,9 +158,192 @@ std::atomic<bool> g_hooked{false};
 JavaVM* g_jvm = nullptr;
 jclass g_callback_class = nullptr;
 jmethodID g_on_thread_created = nullptr;
+/** 治理决策回调：int onThreadCreateRequested(String callerSite) → 0放行/1降级/2拒绝 */
+jmethodID g_on_create_requested = nullptr;
+
+/** 缓存 FindClass 结果，避免每次创建都重复查找（JNI FindClass 有明显开销） */
+jclass g_thread_cls = nullptr;
+jclass g_ste_cls = nullptr;
+jmethodID g_mid_current_thread = nullptr;
+jmethodID g_mid_get_stack = nullptr;
+jmethodID g_mid_ste_to_string = nullptr;
+jmethodID g_mid_ste_get_class = nullptr;
+
+/**
+ * 调用点缓存（thread_local，避免跨线程竞争）。
+ *
+ * ⚠️ 抓 Java 堆栈是本 Hook 里最重的操作。绝不能每次创建都抓 ——
+ *    那样会把「建线程」这件事本身拖慢，反而制造了新问题。
+ *
+ * 节流策略：线程给自己缓存一个「本节拍内的调用点」。
+ * 同一条线程连续建多个线程时（SDK 批量建线程的典型形态），
+ * 调用点几乎必然相同，缓存命中率很高。
+ */
+constexpr long CALLER_SITE_TTL_MS = 500;
+struct CallerSiteCache {
+    char site[192];
+    long stamp_ms;
+};
+
+/** 单调时钟毫秒 */
+long nowMillis();
+
+/** 抓 Java 堆栈取调用点，定义在下方（先声明，供上面的节流缓存调用） */
+void resolveCallerSite(JNIEnv* env, char* out, size_t out_size);
+
+CallerSiteCache& callerSiteCache() {
+    static thread_local CallerSiteCache c{{0}, 0};
+    return c;
+}
+
+/** 取调用点（带 500ms 缓存）。命中缓存时零 JNI 开销。 */
+const char* callerSiteThrottled(JNIEnv* env) {
+    CallerSiteCache& c = callerSiteCache();
+    long now = nowMillis();
+    if (c.site[0] != '\0' && (now - c.stamp_ms) < CALLER_SITE_TTL_MS) {
+        return c.site;   // 缓存命中
+    }
+    resolveCallerSite(env, c.site, sizeof(c.site));
+    c.stamp_ms = now;
+    return c.site;
+}
+
 // 观测：创建动作来自 Java 线程还是纯 native 线程
 std::atomic<int> g_fromJavaCount{0};
 std::atomic<int> g_fromNativeCount{0};
+
+// ═══════════════════════════════════════════════════════════════
+// 控制层：从「观测」升级为「治理」
+//
+// 这是 Native Hook 相对 ASM/Lint 唯一不可替代的价值：
+// ASM 只能改你能重编译的代码，Lint 只能拦你写的新代码，
+// 而 Hook 能管住**已经在 APK 里、你改不了源码的三方 SDK**。
+//
+// 三个动作梯度（由轻到重）：
+//   1. 观测   —— 只记录，不干预（默认）
+//   2. 降级   —— 允许创建，但把优先级压低 + 缩小栈
+//   3. 拒绝   —— 直接返回 EAGAIN，让 SDK 的线程创建失败
+//
+// 生产上应当「先只观测一段时间，用真实数据定策略，再逐步加码」。
+// 一上来就全局拒绝会把 SDK 搞崩。
+// ═══════════════════════════════════════════════════════════════
+
+/** 治理动作 */
+enum class Action {
+    ALLOW,     // 放行，原样创建
+    DEMOTE,    // 放行但降级：设低 nice + 缩小栈
+    REJECT,    // 拒绝创建
+};
+
+/** 单条策略：按调用点前缀匹配 */
+struct Rule {
+    const char* caller_prefix;  // 调用点前缀（"com.thirdparty.sdk" 等），空串=兜底规则
+    Action action;
+};
+
+/**
+ * 策略表。按顺序匹配，第一条 caller_prefix 命中即生效。
+ *
+ * ⚠️ 这里用静态常量字符串，是因为规则在编译期就固定了。
+ *    生产环境应改为从配置/服务端下发。
+ */
+const Rule g_rules[] = {
+        // 演示：把「即将失控」的创建点降级，而不是拒绝 —— 保留功能但压低影响
+        {"com.interview.thread.ThreadMisuseScenarios", Action::DEMOTE},
+        // 兜底规则（前缀为空匹配一切）
+        {"", Action::ALLOW},
+};
+
+// ─── 全局令牌桶：限制整个进程的线程创建速率 ───
+//
+// 为什么需要它：单看某个调用点可能都「合理」，但 10 个 SDK 同时
+// 各建 5 个线程就是雪崩。速率限制是防雪崩的最后一道闸。
+constexpr int RATE_LIMIT_PER_SEC = 20;     // 每秒最多新建 20 个线程
+constexpr size_t RATE_BUCKET_CAPACITY = 40; // 突发容量
+
+std::atomic<long> g_rate_tokens{RATE_BUCKET_CAPACITY};
+std::atomic<long> g_last_refill_ms{0};
+std::atomic<int> g_rejected_count{0};
+std::atomic<int> g_demoted_count{0};
+std::atomic<int> g_stackShrunkCount{0};
+
+/** 降级时把线程栈压到这个大小。256KB 足够常规任务，且大幅减少虚拟地址空间占用。 */
+constexpr size_t SHRINK_STACK_BYTES = 256 * 1024;
+
+/** 单调时钟毫秒 */
+long nowMillis() {
+    struct timespec ts{};
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+/**
+ * 令牌桶取令牌。返回 true 表示允许，false 表示超速。
+ *
+ * 这个实现故意做成「近似」的：不做 CAS 循环，宁可偶尔多放行一个，
+ * 也不要在 Hook 点引入自旋 —— Hook 点越轻越好。
+ */
+bool acquireRateToken() {
+    long now = nowMillis();
+    long last = g_last_refill_ms.load(std::memory_order_relaxed);
+    if (now - last >= 1000) {
+        // 用 CAS 保证只有一个线程做补充
+        if (g_last_refill_ms.compare_exchange_strong(last, now)) {
+            g_rate_tokens.store(RATE_BUCKET_CAPACITY, std::memory_order_relaxed);
+        }
+    }
+    long cur = g_rate_tokens.load(std::memory_order_relaxed);
+    while (cur > 0) {
+        if (g_rate_tokens.compare_exchange_weak(cur, cur - 1,
+                                               std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * 把「原生线程创建」转为「受治理的创建」—— 这是 Hook 作为控制点的核心。
+ *
+ * 关键：pthread_create 的 attr 是可修改的！我们可以：
+ *   · pthread_attr_setstacksize  —— 缩小线程栈（治内存）
+ *   · 在新线程入口包一层          —— 设 nice、改名（治调度）
+ *
+ * @param out_wrapped 若需要包装入口函数，这里返回新的 start_routine
+ */
+struct CreatePlan {
+    Action action = Action::ALLOW;
+    size_t stack_size = 0;          // 0 表示不改
+    void* (*wrapped_entry)(void*) = nullptr;
+    void* wrapped_arg = nullptr;
+};
+
+/*
+ * ═══════════════════════════════════════════════════════════════════
+ * 【已废弃方案：在 pthread 入口设 nice】—— 保留记录，避免后人重蹈
+ *
+ * 曾实现过一个入口包装函数：在 new 线程的 start_routine 里调
+ * setpriority(PRIO_PROCESS, 0, 10)，想把 SDK 的线程降为后台优先级。
+ *
+ * 实测证明**这条路走不通**（API 36 模拟器，探针回读 /proc/PID/task/TID/stat）：
+ *
+ *   [demote-probe] setpriority rc=0 nice_at_entry=10    ← 设置成功
+ *   [demote-probe] entry 返回，nice_end=0               ← 又变回 0
+ *   业务运行期间从外部读该 tid：nice=0                   ← 实际执行时是 0
+ *
+ * 原因：ART 在 Java 线程真正进入 run() 时会重新应用 java.lang.Thread
+ * 的 priority 字段，把我们在更早的 native 入口设的 nice 覆盖掉。
+ * 那个 10 只存在于「pthread 入口」到「ART 线程初始化」之间的几微秒窗口。
+ *
+ * 结论：
+ *   · native 入口**不是**设优先级的正确位置；正确位置是 Java 层
+ *     ThreadFactory（包一层 Runnable，在 run() 内设置 —— 见
+ *     ThreadPools.NamedThreadFactory，那里实测能稳定生效）。
+ *   · native 能稳定控制的是**栈大小**（attr 在 pthread_create 时
+ *     就 mmap 定死，ART 无法事后更改），见下方 DEMOTE 分支。
+ * ═══════════════════════════════════════════════════════════════════
+ */
+
 
 /**
  * 查询当前线程的 JNIEnv。
@@ -314,6 +500,111 @@ void reportToJava(const char* thread_name) {
     }
 }
 
+/**
+ * 向 Java 侧征询治理决策。
+ *
+ * 【设计】策略留在 Java（可配置、可热更新、好测试），
+ *   执行放在 native（只有这里能改 attr、能拦截）——
+ *   「决策与执行分离」。
+ *
+ * 回调签名：int onThreadCreateRequested(String callerSite)
+ *   返回 0 = 放行，1 = 降级，2 = 拒绝
+ *
+ * ⚠️ 这个回调在 Hook 点被同步调用，Java 侧必须极快返回，
+ *    绝不能在回调里做 IO 或抓全量堆栈。
+ */
+int queryPolicyFromJava(JNIEnv* env, jmethodID mid, const char* caller_site) {
+    if (env == nullptr || mid == nullptr || g_callback_class == nullptr) {
+        return 0;   // 拿不到策略时一律放行，绝不因治理机制本身阻断业务
+    }
+    jstring jsite = env->NewStringUTF(caller_site != nullptr ? caller_site : "");
+    if (jsite == nullptr) return 0;
+
+    jint decision = env->CallStaticIntMethod(g_callback_class, mid, jsite);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        decision = 0;
+    }
+    env->DeleteLocalRef(jsite);
+    return decision;
+}
+
+/**
+ * 取当前调用点（"类名.方法:行号"）。用于策略匹配与归因。
+ * 拿不到就返回空串 —— 空串会匹配兜底规则。
+ *
+ * ⚠️ 本函数会抓 Java 堆栈，开销不可忽略。调用方必须自己做节流：
+ *    只在「需要策略决策」或「还在采样窗口内」时才调用。
+ */
+void resolveCallerSite(JNIEnv* env, char* out, size_t out_size) {
+    out[0] = '\0';
+    if (env == nullptr || g_thread_cls == nullptr) return;
+
+    jmethodID currentMid = g_mid_current_thread;
+    jmethodID stackMid = g_mid_get_stack;
+    jmethodID toStrMid = g_mid_ste_to_string;
+    jmethodID getClsMid = g_mid_ste_get_class;
+
+    if (currentMid && stackMid && toStrMid && getClsMid) {
+        jobject cur = env->CallStaticObjectMethod(g_thread_cls, currentMid);
+        if (cur != nullptr) {
+            jobjectArray frames = reinterpret_cast<jobjectArray>(
+                    env->CallObjectMethod(cur, stackMid));
+            if (frames != nullptr) {
+                jsize len = env->GetArrayLength(frames);
+                for (jsize i = 0; i < len && i < 16; ++i) {
+                    jobject ste = env->GetObjectArrayElement(frames, i);
+                    if (ste == nullptr) continue;
+                    jstring cls = reinterpret_cast<jstring>(env->CallObjectMethod(ste, getClsMid));
+                    const char* clsChars = cls ? env->GetStringUTFChars(cls, nullptr) : nullptr;
+                    bool skip = false;
+                    if (clsChars != nullptr) {
+                        // 跳过「建线程」机制自身的帧
+                        skip = strncmp(clsChars, "java.lang.Thread", 16) == 0 ||
+                               strncmp(clsChars, "java.lang.Throwable", 19) == 0 ||
+                               strncmp(clsChars, "java.util.concurrent", 20) == 0 ||
+                               strncmp(clsChars, "com.interview.thread.NativeThreadHook", 37) == 0 ||
+                               strncmp(clsChars, "dalvik.system", 13) == 0;
+                    }
+                    if (clsChars != nullptr && !skip) {
+                        jstring line = reinterpret_cast<jstring>(env->CallObjectMethod(ste, toStrMid));
+                        const char* lineChars = line ? env->GetStringUTFChars(line, nullptr) : nullptr;
+                        if (lineChars != nullptr) {
+                            // toString 形如 "com.foo.Bar.baz(Bar.java:42)"，
+                            // 截到 '(' 之前 + 行号，拼成 "com.foo.Bar.baz:42"
+                            snprintf(out, out_size, "%s", lineChars);
+                            char* paren = strchr(out, '(');
+                            if (paren != nullptr) {
+                                char* colon = strrchr(paren, ':');
+                                if (colon != nullptr) {
+                                    char lineNo[12];
+                                    snprintf(lineNo, sizeof(lineNo), "%s", colon + 1);
+                                    char* close = strchr(lineNo, ')');
+                                    if (close) *close = '\0';
+                                    *paren = '\0';
+                                    size_t used = strlen(out);
+                                    snprintf(out + used, out_size - used, ":%s", lineNo);
+                                } else {
+                                    *paren = '\0';
+                                }
+                            }
+                            env->ReleaseStringUTFChars(line, lineChars);
+                        }
+                        if (line) env->DeleteLocalRef(line);
+                    }
+                    if (clsChars != nullptr) env->ReleaseStringUTFChars(cls, clsChars);
+                    if (cls) env->DeleteLocalRef(cls);
+                    env->DeleteLocalRef(ste);
+                    if (out[0] != '\0') break;
+                }
+                env->DeleteLocalRef(frames);
+            }
+            env->DeleteLocalRef(cur);
+        }
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
 // ───────────────────────────────────────────────
 // 【替换函数】签名必须与原 pthread_create「完全一致」。
 // 因为我们是把它的地址直接塞进 GOT 表项，被调用时栈上的参数布局
@@ -346,6 +637,71 @@ int hooked_pthread_create(pthread_t* thread, const pthread_attr_t* attr,
         g_fromNativeCount.fetch_add(1);
         reportToJava(resolveCurrentThreadName());
     }
+
+    // ═══════════════════════════════════════════════════════
+    // 【控制段】到这里为止都只是「观测」。下面开始真正干预。
+    //
+    // 三个可直接操作的点，改的都是 pthread_create 的参数或返回值：
+    //   ① attr  → pthread_attr_setstacksize  缩小栈（治内存）
+    //   ② 包装 start_routine → 在新线程内设 nice/改名（治调度）
+    //   ③ 直接 return EAGAIN → 拒绝创建（治雪崩）
+    //
+    // ①③ 不需要新线程跑起来就能生效；② 必须在新线程内执行。
+    // ═══════════════════════════════════════════════════════
+
+    // 先看速率：无论什么调用点，全局超速都要挡 —— 这是防雪崩的最后一道闸
+    bool rate_ok = acquireRateToken();
+    if (!rate_ok) {
+        g_rejected_count.fetch_add(1);
+        ALOGW("速率限制命中，拒绝线程创建（总拒绝=%d）",
+              g_rejected_count.load(std::memory_order_relaxed));
+        return EAGAIN;
+    }
+
+    // 再向 Java 侧要策略（决策与执行分离：策略在 Java，执行在 native）
+    // 只有需要决策时才抓调用点，且带 500ms 缓存 —— 绝不每次创建都抓堆栈
+    const char* site = callerSiteThrottled(env);
+    int decision = queryPolicyFromJava(env, g_on_create_requested, site);
+
+    Action action = Action::ALLOW;
+    if (decision == 1) action = Action::DEMOTE;
+    else if (decision == 2) action = Action::REJECT;
+
+    if (action == Action::REJECT) {
+        g_rejected_count.fetch_add(1);
+        ALOGW("策略拒绝线程创建：%s", site);
+        return EAGAIN;   // 让调用方（SDK）看到创建失败
+    }
+
+    // ───────────────────────────────────────────────
+    // ① 栈压缩 —— native 层**真正靠谱**的控制手段
+    //
+    // 为什么它有效，而「设 nice」无效（实测结论）：
+    //   · 栈大小是在 pthread_create 时就确定并 mmap 好的，线程跑起来后
+    //     不会再变 —— ART 无法像重置 nice 那样把它改回去。
+    //   · 而 nice 会被 ART 覆盖：实测在入口设成 10，
+    //     业务真正执行时读 /proc 却是 0（ART 在 Java 线程 run() 时
+    //     重新应用 Java 层 priority）。那个 10 只存在于几微秒窗口内。
+    //
+    // 所以「治内存」交给 native，「治调度」必须交给 Java 层
+    // （ThreadFactory 里包 Runnable 的方式）。
+    // ───────────────────────────────────────────────
+    if (action == Action::DEMOTE && attr != nullptr) {
+        // attr 是 const，但实际由调用方以可写内存传入；
+        // 这里合法地转掉 const 来修改它（Hook 场景的标准做法）
+        pthread_attr_t* mutable_attr = const_cast<pthread_attr_t*>(attr);
+        size_t cur = 0;
+        if (pthread_attr_getstacksize(mutable_attr, &cur) == 0 && cur > SHRINK_STACK_BYTES) {
+            if (pthread_attr_setstacksize(mutable_attr, SHRINK_STACK_BYTES) == 0) {
+                g_stackShrunkCount.fetch_add(1);
+                ALOGD("策略降级：栈 %zuKB → %zuKB  %s", cur / 1024,
+                      SHRINK_STACK_BYTES / 1024, site);
+            }
+        }
+    }
+
+    // ② 全局速率兜底：无论什么调用点，超速都拒绝 —— 防雪崩的最后一道闸
+    //    （放在最后，避免它掩盖了上面的策略归因日志）
 
     // 【空指针保护 + 原样透传】
     // Hook 的本质是 AOP「环绕」——先做自己的事，再把调用原封不动转给原函数。
@@ -737,6 +1093,31 @@ Java_com_interview_thread_NativeThreadHook_installNative(JNIEnv* env, jclass cla
         g_hooked.store(false);
         return;
     }
+
+    // 治理决策回调（可选：拿不到就退化为「一律放行」，不影响观测能力）
+    g_on_create_requested = env->GetStaticMethodID(
+            g_callback_class, "onThreadCreateRequested", "(Ljava/lang/String;)I");
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (g_on_create_requested == nullptr) {
+        ALOGW("未找到策略回调 onThreadCreateRequested，本次仅观测不干预");
+    }
+
+    // 预缓存建栈所需的类与方法 ID。
+    // 这些在 Hook 点会被高频使用，每次 FindClass/GetMethodID 都很贵。
+    g_thread_cls = static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/Thread")));
+    g_ste_cls = static_cast<jclass>(env->NewGlobalRef(env->FindClass("java/lang/StackTraceElement")));
+    if (g_thread_cls != nullptr) {
+        g_mid_current_thread = env->GetStaticMethodID(g_thread_cls, "currentThread", "()Ljava/lang/Thread;");
+        g_mid_get_stack = env->GetMethodID(g_thread_cls, "getStackTrace", "()[Ljava/lang/StackTraceElement;");
+    }
+    if (g_ste_cls != nullptr) {
+        g_mid_ste_to_string = env->GetMethodID(g_ste_cls, "toString", "()Ljava/lang/String;");
+        g_mid_ste_get_class = env->GetMethodID(g_ste_cls, "getClassName", "()Ljava/lang/String;");
+    }
+    if (env->ExceptionCheck()) env->ExceptionClear();
+
+    ALOGD("JNI 句柄预缓存完成（stackTrace 可用=%d）",
+          g_mid_get_stack != nullptr ? 1 : 0);
 
     // ───────────────────────────────────────────────
     // 【C 风格字符串数组】

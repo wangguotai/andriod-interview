@@ -539,16 +539,26 @@ strtab=0x13db0  symtab=0x2f8  jmprel=0x39e50    ← 未重定位的偏移
 
 ## 能力边界（诚实的部分）
 
-**Native Hook 拿不到创建者的 Java 堆栈。** 原因是 Hook 触发时新线程刚创建、尚未 attach 到 JVM，
-此时 `Thread.getAllStackTraces()` 里还没有它。
+**[已更正] Native Hook 能拿到创建者的 Java 堆栈。** 此处曾写「拿不到，因为新线程
+尚未 attach」—— 这个推理是错的。Hook 点执行在**调用者线程**上（不是新建线程），
+而调用者通常就是已 attach 的 Java 线程，所以堆栈完全可以拿到。实测：
 
-所以实践中三者是互补的，不能相互替代：
+```
+捕获线程创建 #16 [Java] ThreadMisuseScenarios.multiSdkPools:60
+```
+
+只有「调用者是纯 native 线程」时才退化为仅报线程名（那种线程本就没有 Java 栈）。
+
+所以三者是互补的，不能相互替代：
 
 | 手段 | 能拿到什么 | 局限 |
 |---|---|---|
 | ASM 插桩 | 编译期就确定「哪个类的哪一行创建了线程」 | 加固/加壳的 SDK 插不进去 |
 | Java 采样 | 运行期完整堆栈 | 采样时刻才知道，且 `getAllStackTraces` 有开销 |
-| Native Hook | **所有**线程创建事件（含三方 SDK），不会漏 | 拿不到 Java 堆栈，只有事件计数 |
+| Native Hook | **所有**线程创建（含三方 SDK）+ 创建者堆栈 | GOT Hook 只覆盖 libart 的 PLT 调用；需防绕过 |
+
+**Native Hook 的控制能力与边界**详见下文专门章节 —— 包括能稳定做的（归因、
+压栈）和实测做不到的（在 native 入口设优先级，会被 ART 覆盖）。
 
 **栈压缩的收益视位宽而定**：省的是虚拟地址空间而非物理内存，所以对 32 位设备意义最大；
 64 位下 50 个线程远未触及地址空间上限（实测全部创建成功）。
@@ -591,9 +601,12 @@ adb logcat -s ThreadDemo:D ThreadMonitor:D ThreadMisuse:D ThreadDefense:D Thread
 | 4.栈压缩对照 | 不同栈大小的创建成功率 |
 | 4.限流降级 | 超并发上限的拒绝行为 |
 | 4.Native Hook | 安装 pthread_create Hook |
+| Hook 降级 | 开启压栈策略（实测 1040KB → 256KB）|
+| Hook 拒绝⚠ | 危险演示：拒绝创建会让调用方收到 OutOfMemoryError |
+| Hook 关闭 | 恢复纯观测模式 |
 | 优先级对照 | `Thread.setPriority` vs `Process.setThreadPriority` 的内核 nice 实测 |
 | 1.并发扫描标定 | 闭循环扫 n=1..16，输出吞吐/P50/P99 曲线与建议 core（约 1 分钟） |
-| Hook 统计 | 查看 Native 捕获次数 |
+| Hook 统计 | 查看 Native 捕获次数 + 创建者分布 + 治理决策数 |
 
 ## 构建说明
 

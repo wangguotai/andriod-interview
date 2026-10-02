@@ -7,6 +7,12 @@
         <compositeConfiguration>
           <compositeBuild compositeDefinitionSource="SCRIPT">
             <builds>
+              <build path="$PROJECT_DIR$/build-logic" name="thread-build-logic">
+                <projects>
+                  <project path="$PROJECT_DIR$/build-logic" />
+                  <project path="$PROJECT_DIR$/build-logic/thread-plugin" />
+                </projects>
+              </build>
               <build path="$PROJECT_DIR$/xshell/rn-root/node_modules/@react-native/gradle-plugin" name="gradle-plugins-root">
                 <projects>
                   <project path="$PROJECT_DIR$/xshell/rn-root/node_modules/@react-native/gradle-plugin" />
@@ -19,15 +25,18 @@
             </builds>
           </compositeBuild>
         </compositeConfiguration>
+        <option name="delegatedBuild" value="false" />
         <option name="testRunner" value="CHOOSE_PER_TEST" />
         <option name="externalProjectPath" value="$PROJECT_DIR$" />
-        <option name="delegatedBuild" value="false" />
-        <option name="gradleJvm" value="18" />
+        <option name="gradleJvm" value="corretto-18" />
         <option name="modules">
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
+            <option value="$PROJECT_DIR$/build-logic" />
+            <option value="$PROJECT_DIR$/build-logic/thread-plugin" />
             <option value="$PROJECT_DIR$/scroll-event-demo" />
+            <option value="$PROJECT_DIR$/thread-lint" />
             <option value="$PROJECT_DIR$/xshell" />
             <option value="$PROJECT_DIR$/xshell/common" />
             <option value="$PROJECT_DIR$/xshell/login" />

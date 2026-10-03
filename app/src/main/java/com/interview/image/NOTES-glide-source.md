@@ -146,7 +146,107 @@ sample = highestOneBit( max(1, min(srcW / reqW, srcH / reqH)) )   // 逐维 floo
   显示占用: 180× 180×4 =  0.12 MB      ← 三态对照里恒定的那一项
 ```
 
-## 7. 本 demo 的教学取舍
+## 8. 实测纠正：Glide 最终交付的位图尺寸**精确等于 target**（两段式缩放）
+
+网上（包括本项目早期注释）流传一个说法：「因为 inSampleSize 只能取 2 的幂，
+所以解码尺寸会是目标的 1~2 倍」。**在 API 36 模拟器上实测证伪了这个说法。**
+
+Glide 的缩放是**两段式**的：
+
+1. **第一段**：`inSampleSize` 粗采样，结果偏大（幂次限制）
+2. **第二段**：`BitmapFactory` 的 density 缩放，精确缩到 target
+
+实测数据（`WaterfallAdapter` 卡片徽标上显示的原始数字）：
+
+```
+原图 3068 × 2012，目标 515 × 338
+  CENTER_OUTSIDE: scale = max(515/3068, 338/2012) = 0.167992
+                  out   = round(scale × src)      = 515 × 338
+  scaleFactor  = min(3068/515, 2012/338) = min(5, 5) = 5
+  inSampleSize = highestOneBit(5) = 4            ← 第一段只能到 4
+
+  若只有第一段：3068/4 × 2012/4 = 767 × 503 = 1.47 MB
+  实测最终交付：515  × 338     = 0.66 MB        ← 第二段又缩掉一半
+```
+
+结论：
+- 徽标上的「÷N」是**两段叠加**的结果，不能读作 `inSampleSize`。
+- 想单独观察 `inSampleSize` 这一段，必须用「解剖台」页（裸 BitmapFactory，无第二段）。
+- 三态对照页用裸 BitmapFactory，所以它的 `inSampleSize` 数字是**第一段的真实值**，
+  与瀑布流页的「÷N」口径不同 —— 这不是矛盾，是两段的差别。
+
+> 另外仍成立的两条（第 5 节已证）：`DEFAULT = CENTER_OUTSIDE`（非 AT_LEAST，
+> `AT_LEAST` 在 Glide 核心代码里从未被引用）；`downsample()` 与 `centerCrop()`
+> 会互相覆盖，谁在后谁生效。
+
+## 9. RecyclerView 时序实测：两个不报错的静默失败
+
+这两个都是真机/模拟器实测出来的，不是推断。
+
+### 9.1 在 `doOnLayout` 里首次 `submit` → 永远空白
+
+```
+doOnLayout { adapter.submit(...) }        // isInLayout = true  → childCount=0，onBind 0 次
+doOnLayout { post { adapter.submit(...) } } // isInLayout = false → childCount=19，onBind 19 次
+```
+
+原因：`doOnLayout` 回调发生在 **layout 遍历过程中**，此时 `RecyclerView.isInLayout == true`。
+RecyclerView 覆写了 `requestLayout()`：
+
+```java
+// RecyclerView.java:4925
+public void requestLayout() {
+    if (mInterceptRequestLayoutDepth == 0 && !mLayoutSuppressed) {
+        super.requestLayout();
+    } else {
+        mLayoutWasDefered = true;      // ← 只置标记，不真正 requestLayout
+    }
+}
+```
+
+而这一次 layout 遍历的 `dispatchLayoutStep2()` 已经跑完，不会再读新数据；
+`stopInterceptRequestLayout()` 也只做 `dispatchLayout()`（单调 `dispatchLayoutStep3`），
+**不会重新调度下一次布局**。于是永久空白 —— adapter 有 20 条，界面上一个 child 都没有。
+
+注意：这个坑**只在 RecyclerView 覆写了 requestLayout 时才出现**。
+普通 View 在 layout 中 requestLayout 会被 framework 正常接管，不会丢。
+
+### 9.2 `onBindViewHolder` 里从 `itemView.parent` 取宽度 → 恒为 0
+
+```
+onBindViewHolder pos=0  itemView.parent=null
+onBindViewHolder pos=1  itemView.parent=null
+```
+
+RecyclerView 的 `tryGetViewHolderForPositionByDeadline` 是**先 bind、后 addView**，
+所以 bind 阶段 `itemView.parent == null`。用 `itemView.parent as? RecyclerView` 取宽度
+会静默拿到 0 → 目标尺寸退化成 1px → 每张卡被压成一条线，且高度参差全丢
+（所有 height 都被 `coerceIn` 到同一个最小值）。
+
+正解：宽度由 Activity 在 `doOnLayout`（onLayout 之后）量好，显式喂给 adapter。
+
+## 11. 端到端实测：对照组真的把降采样架空了（数字对比）
+
+在 API 36 模拟器上跑通完整交互后的**原始读数**（界面上卡片徽标显示的就是这些）：
+
+| 模式 | 原图 | 目标 | 实际解码 | 单张内存 | ÷ | 省 |
+|---|---|---|---|---|---|---|
+| 正常 | 3068 × 2012 | 515 × 338 | 515 × 338 | **0.66 MB** | ÷6 | 35.5× |
+| 正常 | 2982 × 2558 | 515 × 442 | 515 × 442 | 0.88 MB | ÷6 | 35.5× |
+| 对照组 | 3108 × 2256 | SIZE_ORIGINAL | 3108 × 2256 | **26.75 MB** | ÷1 | 1.0× |
+| 对照组 | 2464 × 2058 | SIZE_ORIGINAL | 2464 × 2058 | 19.34 MB | ÷1 | 1.0× |
+| 对照组 | 2538 × 2678 | SIZE_ORIGINAL | 2538 × 2678 | 25.93 MB | ÷1 | 1.0× |
+
+- **单张差约 40 倍**（0.66 MB → 26.75 MB）
+- 进程 native 堆：**25.24 MB → 97.37 MB**（而这只是屏幕上可见的 6 张里的 3 张）
+- `÷1` 与 `省 1.0×` 是「降采样被架空」的直接读数 —— 目标尺寸等于原图尺寸时，
+  `inSampleSize` 恒为 1，没有任何采样发生。
+
+> 注意：**模拟器上 `summary.graphics` 恒为 0.00 MB**（实测确认，
+> `ActivityManager.getProcessMemoryInfo` 的该字段在模拟器上不填充）。
+> 所以水位条要看真实数值必须用真机 —— 界面上同时打印 native 与 java 堆就是为了兜底。
+
+## 12. 本 demo 的教学取舍
 
 - **不做反射偷 Glide 内部 `options.inSampleSize`**。理由：`BitmapFactoryDecoder` 里
   那个 `Options` 是局部变量，没有稳定可依赖的钩子，反射会随版本碎掉，

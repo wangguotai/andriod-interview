@@ -91,20 +91,46 @@ class ImageLabActivity : AppCompatActivity() {
         )
 
         val density = resources.displayMetrics.density
-        adapter = WaterfallAdapter(Glide.with(this), SPAN_COUNT).apply {
+        adapter = WaterfallAdapter(Glide.with(this)).apply {
             setMargins((MIN_ITEM_HEIGHT_DP * density).toInt(), (MAX_ITEM_HEIGHT_DP * density).toInt())
         }
         recyclerView.adapter = adapter
 
-        // 目标尺寸依赖 RecyclerView 的最终测量宽度，必须等第一次布局完成后再加载，
-        // 否则首屏会按宽度 0 去算目标尺寸 —— 那正是我们想批判的"拿不到尺寸"场景，
-        // 不该意外发生在自己身上（学生会先看到一排 1×1 的糊图）。
+        // ─── 首屏加载的时序（这里踩过一个真实且不报错的坑，值得讲清楚）───
         //
-        // 用 doOnLayout 而不是 post{}：post 只是把 Runnable 丢进主线程消息队列，
-        // 它完全可能跑在第一次 measure/layout 之前，那时 width 还是 0。
-        // doOnLayout 保证回调发生在 onLayout 之后，此时宽度已是真实值。
+        // 目标尺寸依赖 RecyclerView 的最终测量宽度，所以必须等第一次布局完成。
+        // 但「等布局完成」有正确与错误的做法：
+        //
+        // ✗ 直接用 doOnLayout { loadNextPage() }
+        //   doOnLayout 的回调发生在 **layout 遍历过程中**（此时 View.isInLayout == true）。
+        //   在遍历中途 notifyDataSetChanged，RecyclerView 覆写的 requestLayout() 会因为
+        //   mInterceptRequestLayoutDepth > 0 而**只置个标记、不真正 requestLayout**；
+        //   而这次 layout 遍历的 dispatchLayoutStep2 已经执行过了，不会再看新数据，
+        //   于是这一帧白过、**RecyclerView 也不会再被调度下一次布局** ——
+        //   结果是永久空白：adapter 里有 20 条数据，界面上一个 child 都没有，
+        //   且 onBindViewHolder 一次都不触发（实测确认）。
+        //
+        // ✓ 先等遍历结束，下一帧再填数据
+        //   doOnLayout 里再 post 一帧：此时 isInLayout == false，notifyDataSetChanged
+        //   的 requestLayout 能正常生效，下一帧就会走完整的 measure→layout→bind。
+        //
+        // 实测对比（API 36 模拟器）：
+        //   doOnLayout 内直接 submit : isInLayout=true  → childCount=0，onBind 触发 0 次
+        //   doOnLayout 内 post 后 submit: isInLayout=false → childCount=19，onBind 触发 19 次
+        //
+        // 注意：这个坑**只在 RecyclerView 复写了 requestLayout() 时才出现**，
+        // 普通 View 在 layout 中 requestLayout 是会被 framework 正常接管的。
         recyclerView.doOnLayout {
-            if (loadedPages == 0) loadNextPage()
+            if (adapter.columnWidthPx == 0) {
+                // 宽度在此刻才可信（onLayout 之后）；bind 阶段拿不到 parent 宽度，只能在这里量
+                val available = (recyclerView.width - recyclerView.paddingLeft - recyclerView.paddingRight)
+                    .coerceAtLeast(1)
+                adapter.columnWidthPx = available / SPAN_COUNT
+            }
+            // 布局还没结束就填数据会被"吞掉"，必须等到下一帧
+            recyclerView.post {
+                if (loadedPages == 0) loadNextPage()
+            }
         }
 
         bindControls()
@@ -240,7 +266,6 @@ class ImageLabActivity : AppCompatActivity() {
 
         /** 2 列：手机竖屏下每列约 180dp，目标尺寸与 2000px+ 的原图形成足够大的落差 */
         private const val SPAN_COUNT = 2
-
         private const val MIN_ITEM_HEIGHT_DP = 120f
         private const val MAX_ITEM_HEIGHT_DP = 320f
 

@@ -40,33 +40,31 @@ import kotlin.math.roundToInt
  * 那个 Options 是 DecodeHelper 里的局部变量，没有稳定钩子，反射代码会随
  * Glide 版本碎掉，教学 demo 不该建立在那种假设上。
  *
- * ─── 关于「解码结果为什么比目标大」───
+ * ─── 「取 min」到底如何逼近目标尺寸（用实测数据说明，别想当然）───
  *
- * 这里有一个流传很广的错误说法（网上大量博客都这么写）：
- * 「ImageView 用 centerCrop 时 Glide 会自动选 AT_LEAST」。
- * 翻 Glide 4.12 源码可以证伪：
+ * 直觉上会以为：inSampleSize 只能取 2 的幂，所以解码结果会比目标大一圈。
+ * 大量博客也是这么写的（"解码尺寸是目标的 1~2 倍"）。**实测证伪了它。**
  *
- *   DownsampleStrategy.java:87   public static final DownsampleStrategy DEFAULT = CENTER_OUTSIDE;
- *   BaseRequestOptions.java:722  centerCrop() → transform(DownsampleStrategy.CENTER_OUTSIDE, ...)
+ * 真实链路是**两段式的**：
+ *   第一段 inSampleSize 粗采样（只能是 2 的幂）→ 得到一个偏大的位图
+ *   第二段 BitmapFactory 的 density 缩放 → 精确缩到 target
  *
- * 而且 `AT_LEAST` 在整个 Glide 核心代码里**从未被引用过**（只有它的声明）。
- * 所以 centerCrop 配的是 **CENTER_OUTSIDE**：
+ * 所以 Glide 交到 ImageView 手里的位图，尺寸**精确等于 target**。
  *
- *   getScaleFactor = max(reqW/srcW, reqH/srcH)     // 铺满
- *   getSampleSizeRounding = QUALITY                 // → calculateScaling 里取 min
+ * 本项目在 API 36 模拟器上实测（卡片徽标显示的就是这一段）：
+ *   原图 3068 × 2012，目标 515 × 338
+ *     CENTER_OUTSIDE: scale = max(515/3068, 338/2012) = 0.167992
+ *                     out  = round(scale × src) = 515 × 338
+ *     scaleFactor = min(3068/515, 2012/338) = min(5, 5) = 5
+ *     inSampleSize = highestOneBit(5) = 4        ← 第一段只能到 4
+ *     inSampleSize 单独解码 = 3068/4 × 2012/4 = 767 × 503 = 1.47 MB
+ *     实测最终交付       = 515 × 338          = 0.66 MB   ← 第二段又缩了一半
  *
- * 「取 min」才是关键：它保证**采样后的尺寸不会小于目标**，即宁可多留像素也不糊。
- * 所以你会看到解码结果常常是目标尺寸的 1~2 倍，而不是恰好相等 ——
- * 这不是 bug，是 Glide 为了画质主动付的内存代价。徽标上那个"÷N"就是它的读数。
- *
- * 另外记一个真实的踩坑点：`downsample(strategy)` 会**覆盖** transform 路径设置过的
- * 策略，但如果先调 downsample 再调 centerCrop，后者又会把它盖回 CENTER_OUTSIDE ——
- * 两次调用谁在后面谁生效。想精确控制就只用其中一个，别混用。
- * 本类只用 centerCrop()，不重复设置。
+ * 所以徽标上那个"÷N"（这里 N=6）是**两段缩放叠加**的结果，不是单纯的 inSampleSize。
+ * 想看清第一段，去「解剖台」页 —— 那里用裸 BitmapFactory，只有 inSampleSize，没有第二段。
  */
 class WaterfallAdapter(
     private val requestManager: RequestManager,
-    private val spanCount: Int,
 ) : RecyclerView.Adapter<WaterfallAdapter.ImageHolder>() {
 
     private val data = mutableListOf<ImageSpec>()
@@ -81,6 +79,25 @@ class WaterfallAdapter(
 
     /** item 之间的间距，计算目标宽度时要从列宽里扣掉（与 XML 里的 margin 保持一致） */
     private val itemMarginPx = 4f
+
+    /**
+     * 单列宽度（像素）。**由 Activity 在布局完成后设置**。
+     *
+     * ─── 为什么不在这里自己从 `itemView.parent` 取（这是一个真实的坑）───
+     *
+     * `onBindViewHolder` 的执行时机是 RecyclerView 的 `tryGetViewHolderForPositionByDeadline`：
+     * **先 bind，后 `addView`**。所以此刻 `holder.itemView.parent` 是 **null**，
+     * 用 `itemView.parent as? RecyclerView` 取宽度会拿到 0，
+     * 目标尺寸随之退化成 1px —— 列表看着"有东西"但每张图都被压成一条线，
+     * 而且瀑布流依赖的高度参差也全丢了（所有 height 都被 coerce 到同一个最小值）。
+     *
+     * 实测验证（API 36 模拟器，最小复现工程）：
+     *   onBindViewHolder pos=0  itemView.parent=null
+     *   onBindViewHolder pos=1  itemView.parent=null
+     *
+     * 所以宽度必须由外部显式喂进来 —— 这是本类唯一的必需外部状态。
+     */
+    var columnWidthPx: Int = 0
 
     private var minHeightPx = 120
     private var maxHeightPx = 640
@@ -120,10 +137,11 @@ class WaterfallAdapter(
         // ── 目标尺寸怎么来的：列宽 → 扣掉 margin → 按原图宽高比算出高度 ──
         // 瀑布流的"参差"就是这么来的：高度由每张图自己的宽高比决定。
         // 而这一步同时在回答降采样的第一个问题：「图片要显示多大？」
-        val rv = holder.itemView.parent as? RecyclerView
-        val available = ((rv?.width ?: 0) - (rv?.paddingLeft ?: 0) - (rv?.paddingRight ?: 0))
-            .coerceAtLeast(1)
-        val columnWidth = available / spanCount
+        //
+        // ⚠️ 宽度来自 columnWidthPx（Activity 在布局完成后测好），**不要**改成
+        //    从 itemView.parent 取 —— bind 阶段 itemView 还没被 addView，
+        //    parent 是 null，会静默退化成 1px。原因见 columnWidthPx 的注释。
+        val columnWidth = columnWidthPx.coerceAtLeast(1)
         val targetWidth = (columnWidth - marginPx * 2).coerceAtLeast(1)
 
         // ratio = 原图宽 / 原图高；显示高度 = 显示宽度 / ratio

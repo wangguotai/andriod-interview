@@ -6,7 +6,7 @@ plugins {
 
 configure<com.interview.thread.plugin.ThreadMonitorExtension> {
     enableNaming.set(true)
-    enableUnify.set(false)
+    enableUnify.set(true)
     excludedPackages.addAll(
         "com.interview.thread.plugin.",
         "com.interview.thread.UnifiedThread",

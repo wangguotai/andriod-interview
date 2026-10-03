@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 图片加载 Lab：picsum 网络图源 + okhttp 下载原图 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission
@@ -89,6 +92,37 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ═══════════════════════════════════════════
+             图片加载 Lab —— Glide 降采样教学
+             ═══════════════════════════════════════════ -->
+
+        <!-- 主入口：瀑布流大图加载 + 内存水位证据面板 -->
+        <activity
+            android:name="com.interview.image.ImageLabActivity"
+            android:exported="true"
+            android:label="大图加载 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 解剖台：inSampleSize 推导过程逐步展开（裸 BitmapFactory） -->
+        <activity
+            android:name="com.interview.image.DecodeInspectorActivity"
+            android:exported="false"
+            android:label="降采样解剖台"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- 三态对照：normal / wrap_content / override -->
+        <activity
+            android:name="com.interview.image.DecodeComparisonActivity"
+            android:exported="false"
+            android:label="三态对照实验"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
     </application>
 
 </manifest>

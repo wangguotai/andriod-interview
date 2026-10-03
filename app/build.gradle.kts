@@ -113,6 +113,11 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.fragment)
+    implementation(libs.androidx.recyclerview)
+    // 图片加载 Lab：Glide 4.12（降采样教学对象）
+    implementation(libs.com.github.bumptech.glide)
+    // okhttp 直连：下载"全尺寸原图"用 —— Glide 内部也依赖它，此处显式声明避免隐式传递
+    implementation(libs.com.squareup.okhttp3)
     // 核心LiveData库 (必需)
     implementation( libs.androidx.lifecycle.livedata)
     // Kotlin扩展 (推荐)

@@ -133,7 +133,7 @@ sample = highestOneBit( max(1, min(srcW / reqW, srcH / reqH)) )   // 逐维 floo
 （这也解释了为什么网上那条简化算法流传这么广 —— 它在默认路径上确实成立；
 它失效的是 `AT_MOST` / `MEMORY` 与 JPEG 取整那几个分支。）
 
-### 首屏样例的真实数字（可直接当课堂例题）
+### 6.1 首屏样例的真实数字（可直接当课堂例题）
 
 ```
 原图 2000 × 2500，目标 180 × 180
@@ -145,6 +145,129 @@ sample = highestOneBit( max(1, min(srcW / reqW, srcH / reqH)) )   // 逐维 floo
   解码后:   250× 312×4 =  0.30 MB      ← 约 1/64
   显示占用: 180× 180×4 =  0.12 MB      ← 三态对照里恒定的那一项
 ```
+
+## 7. RecyclerView 为什么要拦截 `requestLayout()`，以及完整的三阶段流程
+
+> 需求来源：读懂 1.3.2 源码里这段覆写到底在防什么，并给出 measure → layout → draw 的全链路。
+> 源码位置：`androidx/recyclerview/widget/RecyclerView.java`（1.3.2）、
+> `android/view/View.java`、`android/view/ViewRootImpl.java`（API 36）。
+
+### 7.1 两套互相独立的"拦截"，别混为一谈
+
+| 机制 | 字段 / 位置 | 它吞掉的是 |
+|---|---|---|
+| **A. RecyclerView 自我批处理** | `mInterceptRequestLayoutDepth`、`mLayoutWasDefered`（`RecyclerView.java:493~535`，覆写点 `4925`） | RV **内部主动**在跑 layout/scroll 时，子 View 发来的 `requestLayout()` |
+| **B. framework 的"布局中再请求布局"** | `View.mPrivateFlags & PFLAG_FORCE_LAYOUT`（`View.java:28311`）、`ViewRootImpl.mLayoutRequesters` / `mHandlingLayoutInLayoutRequest`（`ViewRootImpl.java:5040`、`5078`） | 任何 View 在 `ViewRootImpl` 布局遍历中发出的 `requestLayout()` |
+
+两者独立。第 9.1 节那个**静默失败**是 B 在起作用（实测 `mInterceptRequestLayoutDepth == 0`），
+A 只会在 RV 自己的 layout/scroll 进行中触发。
+
+### 7.2 `RecyclerView.requestLayout()` 覆写的真实意图
+
+```java
+// RecyclerView.java:4925
+public void requestLayout() {
+    if (mInterceptRequestLayoutDepth == 0 && !mLayoutSuppressed) {
+        super.requestLayout();
+    } else {
+        mLayoutWasDefered = true;   // 只记账，不往上传
+    }
+}
+```
+
+`startInterceptRequestLayout()` / `stopInterceptRequestLayout(boolean)`
+（定义 `2425` / `2442`）成对包裹住**任何会诱使子 View 发 `requestLayout()` 的临界区**：
+
+```java
+void startInterceptRequestLayout() {
+    mInterceptRequestLayoutDepth++;
+    if (mInterceptRequestLayoutDepth == 1 && !mLayoutSuppressed) {
+        mLayoutWasDefered = false;
+    }
+}
+void stopInterceptRequestLayout(boolean performLayoutChildren) {
+    ...
+    if (!performLayoutChildren && !mLayoutSuppressed) mLayoutWasDefered = false; // 丢弃
+    if (mInterceptRequestLayoutDepth == 1) {
+        if (performLayoutChildren && mLayoutWasDefered && !mLayoutSuppressed
+                && mLayout != null && mAdapter != null) {
+            dispatchLayout();                 // ← 攒够了，在这里补一次
+        }
+        if (!mLayoutSuppressed) mLayoutWasDefered = false;
+    }
+    mInterceptRequestLayoutDepth--;
+}
+```
+
+**为什么要这样：**
+
+1. **防重入 / 防丢更新**。一次 `dispatchLayoutStep2()` 里要 bind + `addView` 几十个 child，
+   每个 child 上树都可能触发 `requestLayout()`。若逐个往上抛，会在**同一帧内**触发
+   嵌套布局；若不抛又不记账，这一批数据变更就彻底丢了。`mLayoutWasDefered` 就是那个「记账本」：
+   攒到临界区结束，`stopInterceptRequestLayout(true)` 时**合并成一次** `dispatchLayout()`。
+2. **顺带把 measure 也管住**。`onMeasure()` 里调 `mLayout.onMeasure(...)` 时同样会走这套
+   （`4048/4061` auto-measure 分支、`4077/4079` 自定义 onMeasure 分支），
+   避免 measure 期间的长老链重入。
+3. **scroll 期间只记账不重排**。`scrollStep()`（`2038`/`2057`）用 `false` 结束，
+   因为滚动过程中的请求应由滚动本身处理，不该再起一次完整 layout。
+
+`performLayoutChildren` 这个参数是关键开关：**只有 `true` 才补 `dispatchLayout()`**。
+全库用到 `true` 的只有两处 —— `consumePendingUpdateOperations()`（`2101`，滚动前消费挂起的更新）
+和 `removeAnimatingView()`（`1603`，当真的移除了动画 View 时）。
+`dispatchLayoutStep1/2/3` 自己（`4622`/`4653`/`4738`）用的都是 `false`：
+**布局步骤内部产生的请求一律丢弃**，因为这次布局马上就会读取最新数据，不需要另起一次。
+
+### 7.3 measure → layout → draw 全链路
+
+```
+ViewRootImpl.performTraversals()
+ ├─ performMeasure()  → host.measure(...)
+ │     └─ RecyclerView.onMeasure()                      // 3989
+ │          ├─ 无 LayoutManager → defaultOnMeasure()    // 立即返回
+ │          ├─ isAutoMeasureEnabled()（Linear/Grid/Staggered 默认 true）
+ │          │     ├─ 先跑 mLayout.onMeasure(...)       // 让 LM 记下 spec
+ │          │     ├─ mLastAutoMeasureSkippedDueToExact = (宽高都 EXACTLY)  // 40-45
+ │          │     ├─ 若 EXACTLY（或 mAdapter == null）→ return；          // 核心：跳过子 View 测量
+ │          │     ├─ mState.mLayoutStep == STEP_START → dispatchLayoutStep1()  // 4542
+ │          │     ├─ mState.mIsMeasuring = true
+ │          │     ├─ dispatchLayoutStep2()              // 4631 ← 真正 bind + 摆放 child
+ │          │     ├─ mLayout.setMeasuredDimensionFromChildren(...)
+ │          │     └─ shouldMeasureTwice() → 再来一遍 step2
+ │          └─ 否则（自定义 onMeasure）
+ │                ├─ mAdapterUpdateDuringMeasure → startIntercept…处理更新…stopIntercept(false)
+ │                └─ startIntercept() → mLayout.onMeasure() → stopIntercept(false)   // 4077/4079
+ │
+ ├─ performLayout()  → host.layout(0,0,mw,mh)          // ViewRootImpl:5059，mInLayout = true
+ │     └─ RecyclerView.onLayout()                       // 4917
+ │          └─ dispatchLayout()                         // 唯一的驱动入口
+ │               ├─ STEP_START  → step1(); setExactMeasureSpecsFrom(this); step2()
+ │               ├─ 有待处理更新 / 尺寸变了 → step2()   // onMeasure 里跑过，这里补
+ │               └─ dispatchLayoutStep3()               // 4662
+ │     [回调 View.layout 返回后] mInLayout = false；复查 mLayoutRequesters
+ │
+ └─ performDraw()      → host.draw(canvas)
+       └─ RecyclerView.draw()  // 4943：super.draw() → ItemDecoration.onDrawOver()
+       └─ RecyclerView.onDraw()// 5004：ItemDecoration.onDraw()
+```
+
+`dispatchLayoutStep3`（`4662`）只做「记录动画首末状态 + 触发动画 + 收尾」，
+**不会**重新 bind 或重新测量 —— 这正是 9.1 那个坑里「step2 已经跑完就再没人管新数据」的由来。
+
+三个 `State.mLayoutStep` 常量把一次完整布局**拆到 measure 与 layout 两次遍历里**：
+`STEP_START → dispatchLayoutStep1 → STEP_LAYOUT → dispatchLayoutStep2 → STEP_ANIMATIONS
+→ dispatchLayoutStep3 → STEP_START`。所以看到「RV 在 onMeasure 里就把 child 排好了」
+不是 bug，是 auto-measure 的设计：先测出内容尺寸，再由父容器决定最终大小。
+
+### 7.4 `mLastAutoMeasureSkippedDueToExact` 与 `dispatchLayout()` 的补偿
+
+若宽高都是 `EXACTLY`（比如 `match_parent` 且父容器给死），`onMeasure` 直接 return，
+**跳过子 View 测量**（省一次无用功）。代价是 step1/step2 没跑，于是 `onLayout → dispatchLayout()`
+要补上（见 7.3 第二个分支）。
+
+如果 onMeasure 当时是非 EXACTLY（我们瀑布流就是 `MATCH_PARENT×MATCH_PARENT` 但对齐方式可能给
+`AT_MOST`），已经跑过 step1/step2；只要尺寸一致、也没有新更新，`dispatchLayout()` 就**只跑 step3**。
+这就是「onMeasure 里 childCount=0、onLayout 后突然出现 19 个 child」的原因：child 是在
+**measure 阶段**的 step2 里生出来的。
 
 ## 8. 实测纠正：Glide 最终交付的位图尺寸**精确等于 target**（两段式缩放）
 
@@ -190,26 +313,36 @@ doOnLayout { adapter.submit(...) }        // isInLayout = true  → childCount=0
 doOnLayout { post { adapter.submit(...) } } // isInLayout = false → childCount=19，onBind 19 次
 ```
 
-原因：`doOnLayout` 回调发生在 **layout 遍历过程中**，此时 `RecyclerView.isInLayout == true`。
-RecyclerView 覆写了 `requestLayout()`：
+原因：`doOnLayout` 回调发生在 **layout 遍历过程中**，此时 `View.isInLayout == true`。
 
-```java
-// RecyclerView.java:4925
-public void requestLayout() {
-    if (mInterceptRequestLayoutDepth == 0 && !mLayoutSuppressed) {
-        super.requestLayout();
-    } else {
-        mLayoutWasDefered = true;      // ← 只置标记，不真正 requestLayout
-    }
-}
-```
+> ⚠️ 这里我第一版写错过成因：**不是** `mInterceptRequestLayoutDepth > 0`。
+> 埋点实测该值为 **0**，真正被吃掉的是 `View.requestLayout()` 里的
+> `PFLAG_FORCE_LAYOUT`（见第 7 节）。下面这行日志是证据：
+>
+> ```
+> >>> submit   isLaidOut=false isLayoutRequested=true isInLayout=true
+>             mInterceptRequestLayoutDepth=0
+>   >> RV.requestLayout() 进入  isInLayout=true mInterceptRequestLayoutDepth=0
+> [[submit 后下一帧]]          childCount=0
+> ```
 
-而这一次 layout 遍历的 `dispatchLayoutStep2()` 已经跑完，不会再读新数据；
-`stopInterceptRequestLayout()` 也只做 `dispatchLayout()`（单调 `dispatchLayoutStep3`），
-**不会重新调度下一次布局**。于是永久空白 —— adapter 有 20 条，界面上一个 child 都没有。
+机制（完整推导见第 7 节）：
+1. 回调在 `ViewRootImpl.performLayout()` 内部，`mInLayout=true`；
+2. `notifyDataSetChanged()` → `AdapterHelper` 置待处理更新 → 调用 RV 覆写的
+   `requestLayout()`；此时 depth==0，**照常调用 `super.requestLayout()`**
+   （实测 `isLayoutRequested=true`）；
+3. 但 `View.layout()` 一定在 `onLayout(...)` 返回后才清 `PFLAG_FORCE_LAYOUT`，
+   而 `ViewRootImpl` 复查待处理请求者时**只认这个位** → 新一轮请求被视为"已经被处理"，
+   第二遍 layout 遍历被跳过，什么都没发生；
+4. 「没被调度的数据变更」要等下次触发布局才由
+   `dispatchLayout() → dispatchLayoutStep2()` 消费 —— 而这里**永远没有下一次**。
+   于是永久空白：adapter 有 20 条，界面上一个 child 都没有。
 
-注意：这个坑**只在 RecyclerView 覆写了 requestLayout 时才出现**。
-普通 View 在 layout 中 requestLayout 会被 framework 正常接管，不会丢。
+反过来说，这也解释了两条实用结论：
+- 布局期间改数据应走 `setAdapter` / `post`（下一帧），或至少调一次真正的
+  `requestLayout()`（不经过 RK 的吞并路径）来补一次调度；
+- 这个坑**不是 RecyclerView 独有的**：任何在 `onLayout` 里 `notifyXxx` 的 AdapterView
+  都会丢这一帧。RV 的特殊之处只在于它的 `dispatchLayoutStep3` 之后不再补布局。
 
 ### 9.2 `onBindViewHolder` 里从 `itemView.parent` 取宽度 → 恒为 0
 
@@ -225,7 +358,7 @@ RecyclerView 的 `tryGetViewHolderForPositionByDeadline` 是**先 bind、后 add
 
 正解：宽度由 Activity 在 `doOnLayout`（onLayout 之后）量好，显式喂给 adapter。
 
-## 11. 端到端实测：对照组真的把降采样架空了（数字对比）
+## 10. 端到端实测：对照组真的把降采样架空了（数字对比）
 
 在 API 36 模拟器上跑通完整交互后的**原始读数**（界面上卡片徽标显示的就是这些）：
 
@@ -246,7 +379,7 @@ RecyclerView 的 `tryGetViewHolderForPositionByDeadline` 是**先 bind、后 add
 > `ActivityManager.getProcessMemoryInfo` 的该字段在模拟器上不填充）。
 > 所以水位条要看真实数值必须用真机 —— 界面上同时打印 native 与 java 堆就是为了兜底。
 
-## 12. 本 demo 的教学取舍
+## 11. 本 demo 的教学取舍
 
 - **不做反射偷 Glide 内部 `options.inSampleSize`**。理由：`BitmapFactoryDecoder` 里
   那个 `Options` 是局部变量，没有稳定可依赖的钩子，反射会随版本碎掉，

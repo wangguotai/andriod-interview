@@ -103,12 +103,15 @@ class ImageLabActivity : AppCompatActivity() {
         //
         // ✗ 直接用 doOnLayout { loadNextPage() }
         //   doOnLayout 的回调发生在 **layout 遍历过程中**（此时 View.isInLayout == true）。
-        //   在遍历中途 notifyDataSetChanged，RecyclerView 覆写的 requestLayout() 会因为
-        //   mInterceptRequestLayoutDepth > 0 而**只置个标记、不真正 requestLayout**；
-        //   而这次 layout 遍历的 dispatchLayoutStep2 已经执行过了，不会再看新数据，
-        //   于是这一帧白过、**RecyclerView 也不会再被调度下一次布局** ——
+        //   在遍历中途 notifyDataSetChanged，requestLayout() 确实被调用了，
+        //   但紧接着 View.layout() 会清掉 PFLAG_FORCE_LAYOUT，而 ViewRootImpl 复查
+        //   「布局中发起的请求」时只认这个位 —— 于是这一帧被当成"已处理"，
+        //   第二遍 layout 遍历被跳过；而这次遍历的 step2 又早已跑完，不会再看新数据。
         //   结果是永久空白：adapter 里有 20 条数据，界面上一个 child 都没有，
         //   且 onBindViewHolder 一次都不触发（实测确认）。
+        //
+        //   注意：这**不是** mInterceptRequestLayoutDepth 造成的 —— 实测该值为 0，
+        //   RecyclerView 的覆写照常放行到了 super.requestLayout()。详见 NOTES 第 7/9 节。
         //
         // ✓ 先等遍历结束，下一帧再填数据
         //   doOnLayout 里再 post 一帧：此时 isInLayout == false，notifyDataSetChanged

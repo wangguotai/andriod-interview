@@ -212,6 +212,105 @@ class ImagePipelineGoldenTest {
         )
     }
 
+    // ─────────────────────────── 盒式模糊对拍（M5）───────────────────────────
+
+    @Test
+    fun blurNativeMatchesKotlinReference_bitForBit() {
+        assumeTrue(
+            "native 不可用，跳过 strict 对拍：" + ImagePipelineBridge.describe(),
+            ImagePipelineBridge.available,
+        )
+        // 覆盖多种尺寸/形状（含 1×1、1×N、N×1、非方形）与多个 radius（含 0、1、3、8）。
+        val sizes = listOf(
+            1 to 1, 1 to 7, 7 to 1, 3 to 3, 8 to 8,
+            16 to 16, 37 to 23, 64 to 64, 100 to 60,
+        )
+        val radii = listOf(0, 1, 3, 8)
+        for ((w, h) in sizes) {
+            for (radius in radii) {
+                val src = randomRgba(w, h)
+                val nativeDst = ByteBuffer.allocateDirect(w * h * 4).order(ByteOrder.LITTLE_ENDIAN)
+                val rc = ImagePipelineNative.blurBox(direct(src), w, h, nativeDst, radius)
+                assertEquals("native blurBox 应成功（${w}x$h r=$radius），rc=$rc", 0, rc)
+                nativeDst.rewind()
+
+                val javaDst = ByteArray(w * h * 4)
+                ImagePipelineBridge.JavaFallback.blurBox(src, w, h, javaDst, radius)
+
+                val nativeBytes = nativeDst.toBytes()
+                val diff = nativeBytes.indices.firstOrNull { nativeBytes[it] != javaDst[it] }
+                assertEquals(
+                    "native 与 Kotlin 模糊结果不一致（${w}x$h r=$radius），" +
+                        "首个差异字节索引=$diff native=${diff?.let { nativeBytes[it] }} " +
+                        "java=${diff?.let { javaDst[it] }}",
+                    null,
+                    diff,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun blurEdgeClampMatchesOnHandcraftedRow() {
+        assumeTrue(
+            "native 不可用，跳过 strict 对拍：" + ImagePipelineBridge.describe(),
+            ImagePipelineBridge.available,
+        )
+        // 手工构造：R 通道 [10,200,30]，其余 0。边缘复制 + 四舍五入的已知答案
+        // （73/80/87）同时钉住 native 与 Kotlin，避免「一起抄错还一致」。
+        val src = ByteArray(3 * 4)
+        src[0] = 10.toByte(); src[3] = 255.toByte()
+        src[4] = 200.toByte(); src[7] = 255.toByte()
+        src[8] = 30.toByte(); src[11] = 255.toByte()
+        val nativeDst = ByteBuffer.allocateDirect(12).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals(0, ImagePipelineNative.blurBox(direct(src), 3, 1, nativeDst, 1))
+        nativeDst.rewind()
+        val nb = nativeDst.toBytes()
+        assertEquals("native 左边缘", 73, nb[0].toInt() and 0xFF)
+        assertEquals("native 中", 80, nb[4].toInt() and 0xFF)
+        assertEquals("native 右边缘", 87, nb[8].toInt() and 0xFF)
+
+        val jdst = ByteArray(12)
+        ImagePipelineBridge.JavaFallback.blurBox(src, 3, 1, jdst, 1)
+        for (i in jdst.indices) assertEquals("字节 $i", nb[i], jdst[i])
+    }
+
+    @Test
+    fun blurRealBitmapPathAgreesBetweenNativeAndJava() {
+        // 覆盖 Bitmap 读写 + 输入输出 buffer 不别名（同尺寸下若别名会自读自写算错）。
+        val w = 24
+        val h = 18
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888).apply {
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    setPixel(
+                        x, y,
+                        if ((x + y) % 2 == 0) Color.rgb(230, 40, 60) else Color.rgb(20, 60, 220),
+                    )
+                }
+            }
+        }
+        val nativeOut = ImagePipelineBridge.blurOutcome(bmp, radius = 4, preferNative = true)
+        val javaOut = ImagePipelineBridge.blurOutcome(bmp, radius = 4, preferNative = false)
+        if (ImagePipelineBridge.available) {
+            assertTrue("native 可用时 blur 应实走 Rust", nativeOut.usedNative)
+        }
+        assertTrue("preferNative=false 必须走 Java 回退", !javaOut.usedNative)
+
+        val a = nativeOut.bitmap
+        val b = javaOut.bitmap
+        assertNotNull("模糊应产出位图", a)
+        assertNotNull("模糊应产出位图", b)
+        assertEquals("输出尺寸", b!!.width, a!!.width)
+        assertEquals("输出尺寸", b.height, a.height)
+
+        val ab = IntArray(a.width * a.height)
+        val bb = IntArray(b.width * b.height)
+        a.getPixels(ab, 0, a.width, 0, 0, a.width, a.height)
+        b.getPixels(bb, 0, b.width, 0, 0, b.width, b.height)
+        assertArrayEqualsMsg("真实 Bitmap 模糊路径不一致", bb, ab)
+    }
+
     @Test
     fun nativeReportsFailureOnBadBufferWithNegativeCode() {
         assumeTrue("native 不可用，跳过", ImagePipelineBridge.available)
@@ -223,6 +322,9 @@ class ImagePipelineGoldenTest {
         // dominantColor 失败同样返回负数；成功值 0x000000（黑）是合法的，不能用 0 判失败。
         val dc = ImagePipelineNative.dominantColor(tiny, 4, 4)
         assertTrue("缓冲不足应返回负错误码，实际 dc=$dc", dc < 0)
+        // blurBox 同样：缓冲不足返回负数；radius=0 时 4 字节 1×1 应成功返回 0。
+        val badBlur = ImagePipelineNative.blurBox(tiny, 4, 4, dst, 1)
+        assertTrue("缓冲不足应返回负错误码，实际 rc=$badBlur", badBlur < 0)
     }
 
     private fun solid(r: Int, g: Int, b: Int, a: Int, n: Int): ByteArray {

@@ -105,7 +105,102 @@ object ImagePipelineReference {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // 2) 主色调
+    // 2) 盒式模糊（M5）
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * 盒式模糊（box blur）的**逐行翻译**，权威定义见 `rust/imagepipeline/src/blur.rs::blur_box`。
+     *
+     * ─── 为什么选盒式而不是高斯 ───
+     *
+     * 这里的目的不是做出最好看的模糊，而是提供一个**可逐位对拍**的算子：
+     * 盒式只有整数加权（全是 1），没有浮点权重，两语言极易做到逐位一致。
+     * M5 真正的结论（屏幕上要的模糊交给 GPU `RenderEffect`、CPU 版只在「要拿像素」
+     * 时才划算）不依赖模糊核的好坏，依赖的是「谁在执行、结果要不要被当数据用」。
+     *
+     * ─── 与 Rust 必须逐字一致的语义 ───
+     *
+     * - `radius == 0` → 直接拷贝（identity）；
+     * - 窗口 `n = 2*radius + 1`；越界采样用**边缘复制**（clamp 到 `[0, w-1]`/`[0, h-1]`），
+     *   这也是 Skia/GPU 模糊的常规约定，避免边缘发黑；
+     * - clamp 写法照抄 Rust：`xx = (x + k).saturating_sub(radius).min(w-1)`，
+     *   因 `x + k >= 0`，等价于 `clamp(x + k - radius, 0, w-1)`；
+     * - 均值取整：`(sum + n/2) / n`，四舍五入（整数除法，`n/2` 也是整数除法）；
+     * - 两趟：先水平写中间缓冲 `tmp`，再垂直写回 `dst`；**两趟都在 u8 上落值**。
+     *
+     * ⚠️ 这里「两趟都落 u8」不会引入 downscale 那种 double-rounding 问题：
+     * 盒式模糊的水平结果本身就是一个有意义的中间态（等于先做一次横条模糊），
+     * 而 downscale 的中间结果只是被丢弃的中间量。两者不同，别混为一谈。
+     *
+     * 累加用 [Long]（对应 Rust 的 `u64`）。这些尺寸不会溢出，但用 Long 让两边
+     * 的「大数行为」一致，避免假差异。
+     *
+     * @throws IllegalArgumentException 尺寸非正、radius 为负，或 [src]/[dst] 缓冲区不足。
+     */
+    fun blurBox(src: ByteArray, w: Int, h: Int, dst: ByteArray, radius: Int) {
+        require(radius >= 0) { "radius 不能为负" }
+        require(w > 0 && h > 0) { "尺寸不能为 0" }
+        val need = w.toLong() * h * 4
+        require(src.size >= need) { "源缓冲区过小" }
+        require(dst.size >= need) { "目标缓冲区过小" }
+        val needI = w * h * 4
+
+        if (radius == 0) {
+            src.copyInto(dst, 0, 0, needI)
+            return
+        }
+
+        val r = radius
+        val n = (2L * r + 1).toLong()
+
+        // ── 第一趟：水平（src → tmp），两趟都落 u8 ──
+        val tmp = ByteArray(needI)
+        for (y in 0 until h) {
+            val row = y * w * 4
+            for (x in 0 until w) {
+                var s0 = 0L; var s1 = 0L; var s2 = 0L; var s3 = 0L
+                for (k in 0..(2 * r)) {
+                    // (x+k).saturating_sub(r).min(w-1)：边缘复制
+                    val xx = (x + k - r).coerceAtLeast(0).coerceAtMost(w - 1)
+                    val i = row + xx * 4
+                    s0 += (src[i].toInt() and 0xFF).toLong()
+                    s1 += (src[i + 1].toInt() and 0xFF).toLong()
+                    s2 += (src[i + 2].toInt() and 0xFF).toLong()
+                    s3 += (src[i + 3].toInt() and 0xFF).toLong()
+                }
+                val o = row + x * 4
+                tmp[o] = ((s0 + n / 2) / n).toInt().toByte()
+                tmp[o + 1] = ((s1 + n / 2) / n).toInt().toByte()
+                tmp[o + 2] = ((s2 + n / 2) / n).toInt().toByte()
+                tmp[o + 3] = ((s3 + n / 2) / n).toInt().toByte()
+            }
+        }
+
+        // ── 第二趟：垂直（tmp → dst）──
+        val stride = w * 4
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                var s0 = 0L; var s1 = 0L; var s2 = 0L; var s3 = 0L
+                for (k in 0..(2 * r)) {
+                    // (y+k).saturating_sub(r).min(h-1)
+                    val yy = (y + k - r).coerceAtLeast(0).coerceAtMost(h - 1)
+                    val i = yy * stride + x * 4
+                    s0 += (tmp[i].toInt() and 0xFF).toLong()
+                    s1 += (tmp[i + 1].toInt() and 0xFF).toLong()
+                    s2 += (tmp[i + 2].toInt() and 0xFF).toLong()
+                    s3 += (tmp[i + 3].toInt() and 0xFF).toLong()
+                }
+                val o = y * stride + x * 4
+                dst[o] = ((s0 + n / 2) / n).toInt().toByte()
+                dst[o + 1] = ((s1 + n / 2) / n).toInt().toByte()
+                dst[o + 2] = ((s2 + n / 2) / n).toInt().toByte()
+                dst[o + 3] = ((s3 + n / 2) / n).toInt().toByte()
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // 3) 主色调
     // ─────────────────────────────────────────────────────────────────────
 
     /** 直方图桶数，每桶 30°。必须与 Rust 侧 `HUE_BUCKETS` 相同。 */

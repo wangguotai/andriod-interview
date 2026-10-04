@@ -167,4 +167,109 @@ class ImagePipelineReferenceTest {
             ImagePipelineBridge.JavaFallback.dominantColor(ByteArray(3), 2, 2)
         }
     }
+
+    // ─────────────────────────── 盒式模糊（M5）───────────────────────────
+
+    /**
+     * 只对 R 通道有值的 1×N 图：让手算值只盯一个通道，避免「多通道一起算」时
+     * 看漏某个通道的取整差异。G/B 填 0，alpha 填 255。
+     */
+    private fun redRow(vararg rs: Int): ByteArray =
+        img(*Array(rs.size) { i -> px(rs[i], 0, 0, 255) })
+
+    @Test
+    fun blurRadiusZeroIsIdentity() {
+        val src = redRow(10, 200, 30, 90)
+        val dst = ByteArray(src.size)
+        ImagePipelineBridge.JavaFallback.blurBox(src, 4, 1, dst, 0)
+        // radius==0 必须直接拷贝，逐字节相等（含 alpha）。
+        for (i in src.indices) assertEquals("字节 $i", src[i], dst[i])
+    }
+
+    @Test
+    fun blurThreePixelsRadiusOneClampsEdgesAndRounds() {
+        // 与 Rust blur.rs 单测同源的手算答案（n=3，(sum + n/2)/n = (sum+1)/3）：
+        //   x=0: clamp(-1)=0 → 10+10+200=220, (220+1)/3 = 73
+        //   x=1:             → 10+200+30=240, (240+1)/3 = 80
+        //   x=2: clamp(3)=2 → 200+30+30=260, (260+1)/3 = 87
+        val src = redRow(10, 200, 30)
+        val dst = ByteArray(src.size)
+        ImagePipelineBridge.JavaFallback.blurBox(src, 3, 1, dst, 1)
+        assertEquals("左边缘复制", 73, dst[0].toInt() and 0xFF)
+        assertEquals("中间", 80, dst[4].toInt() and 0xFF)
+        assertEquals("右边缘复制", 87, dst[8].toInt() and 0xFF)
+        // alpha 全为 255，模糊后应仍是 255（边缘复制 + 常量不变量）
+        assertEquals(255, dst[3].toInt() and 0xFF)
+        assertEquals(255, dst[7].toInt() and 0xFF)
+        assertEquals(255, dst[11].toInt() and 0xFF)
+    }
+
+    @Test
+    fun blurFlatImageStaysFlat() {
+        // 常量图模糊后必须仍是常量：这是「边缘复制」的直接推论。
+        // 若误用补 0，边缘会被拉暗，这条会立刻红。
+        val src = img(*(Array(5 * 4) { px(123, 45, 200, 255) }))
+        val dst = ByteArray(src.size)
+        ImagePipelineBridge.JavaFallback.blurBox(src, 5, 4, dst, 2)
+        for (i in dst.indices) {
+            val expected = if (i % 4 == 3) 255 else intArrayOf(123, 45, 200)[i % 4]
+            assertEquals("字节 $i 应保持常量", expected, dst[i].toInt() and 0xFF)
+        }
+    }
+
+    @Test
+    fun blurVerticalColumnMatchesHorizontalRow() {
+        // 可分离性：1×3 竖列与 3×1 横排在只沿一个轴模糊时数值应完全一致。
+        // 因为另一轴宽度为 1，其窗口内只有一个值，不改变结果。
+        val rowSrc = redRow(10, 200, 30)
+        val rowDst = ByteArray(rowSrc.size)
+        ImagePipelineBridge.JavaFallback.blurBox(rowSrc, 3, 1, rowDst, 1)
+
+        val colSrc = img(px(10, 0, 0, 255), px(200, 0, 0, 255), px(30, 0, 0, 255))
+        val colDst = ByteArray(colSrc.size)
+        ImagePipelineBridge.JavaFallback.blurBox(colSrc, 1, 3, colDst, 1)
+
+        for (i in rowDst.indices) {
+            assertEquals("横排与竖列第 $i 字节应一致", rowDst[i], colDst[i])
+        }
+    }
+
+    @Test
+    fun blurSinglePixelIsStable() {
+        // 1×1：任何 radius 下窗口内只有它自己（clamp 到 [0,0]），结果不变。
+        val src = img(px(77, 88, 99, 255))
+        val dst = ByteArray(4)
+        ImagePipelineBridge.JavaFallback.blurBox(src, 1, 1, dst, 8)
+        assertEquals(77, dst[0].toInt() and 0xFF)
+        assertEquals(88, dst[1].toInt() and 0xFF)
+        assertEquals(99, dst[2].toInt() and 0xFF)
+        assertEquals(255, dst[3].toInt() and 0xFF)
+    }
+
+    @Test
+    fun blurRejectsIllegalArguments() {
+        val src = ByteArray(16)
+        val dst = ByteArray(16)
+        // radius 为负
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePipelineBridge.JavaFallback.blurBox(src, 2, 2, dst, -1)
+        }
+        // 尺寸为 0
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePipelineBridge.JavaFallback.blurBox(src, 0, 2, dst, 1)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePipelineBridge.JavaFallback.blurBox(src, 2, 0, dst, 1)
+        }
+        // 源缓冲区不足：2x2 需要 16 字节
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePipelineBridge.JavaFallback.blurBox(ByteArray(15), 2, 2, dst, 1)
+        }
+        // 目标缓冲区不足
+        assertThrows(IllegalArgumentException::class.java) {
+            ImagePipelineBridge.JavaFallback.blurBox(src, 2, 2, ByteArray(15), 1)
+        }
+        // 合法参数不抛
+        ImagePipelineBridge.JavaFallback.blurBox(src, 2, 2, dst, 3)
+    }
 }

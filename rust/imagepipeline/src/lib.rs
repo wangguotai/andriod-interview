@@ -25,6 +25,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod blur;
 pub mod dominant;
 pub mod downscale;
 

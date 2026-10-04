@@ -45,11 +45,12 @@ object ImagePipelineBridge {
     /**
      * 与 Rust 侧 `imagepipeline_android::ABI_VERSION` 对齐；不匹配说明 APK 里是旧 .so。
      *
-     * 变更记录：1 → M1（probeLayout）；2 → M2（新增 downscaleArea / dominantColor）。
-     * 升级到 2 的意义：若 APK 里残留只导出 M1 符号的旧 .so，`available` 会因版本
+     * 变更记录：1 → M1（probeLayout）；2 → M2（新增 downscaleArea / dominantColor）；
+     * 3 → M5（新增 blurBox）。
+     * 升级版本号的意义：若 APK 里残留只导出旧符号的 .so，`available` 会因版本
      * 不匹配而判 false，从而**显式降级**，而不是在调用新符号时抛 `UnsatisfiedLinkError`。
      */
-    const val EXPECTED_ABI_VERSION = 2
+    const val EXPECTED_ABI_VERSION = 3
 
     /**
      * native 库是否加载且 ABI 匹配。
@@ -169,6 +170,10 @@ object ImagePipelineBridge {
         /** 参考实现主色调，返回 `0x00RRGGBB`。算法见 [ImagePipelineReference.dominantColor]。 */
         fun dominantColor(src: ByteArray, w: Int, h: Int): Int =
             ImagePipelineReference.dominantColor(src, w, h)
+
+        /** 参考实现盒式模糊。算法见 [ImagePipelineReference.blurBox]（Rust 的逐行翻译）。 */
+        fun blurBox(src: ByteArray, w: Int, h: Int, dst: ByteArray, radius: Int) =
+            ImagePipelineReference.blurBox(src, w, h, dst, radius)
     }
 
     /**
@@ -189,20 +194,33 @@ object ImagePipelineBridge {
      * 像素数（w*h*4）解读，多出的尾部字节不参与运算。
      */
     object RgbaBufferPool {
-        private val local: ThreadLocal<HashMap<Int, ByteBuffer>> =
-            ThreadLocal.withInitial { HashMap<Int, ByteBuffer>() }
+        /**
+         * 键 = (slot, byteSize)。为什么需要 slot 维度：像 blur 这种「输入与输出同尺寸」
+         * 的算子，若只按字节数缓存，第二次 acquire 会拿回**同一个** buffer，
+         * 于是 Rust 侧假设的「输入输出不别名」被破坏，结果是自读自写、静默算错。
+         * 用 slot 把「同一尺寸的两块缓冲」区分开，复用与不别名两个目标同时满足。
+         *
+         * Long 键：高位放 slot（本场景 slot 极小），低位放字节数，避免 String 键
+         * 在每次 acquire 时分配对象（基准循环里这点分配会污染测量）。
+         */
+        private val local: ThreadLocal<HashMap<Long, ByteBuffer>> =
+            ThreadLocal.withInitial { HashMap<Long, ByteBuffer>() }
+
+        private fun key(slot: Int, byteSize: Int): Long =
+            (slot.toLong() shl 40) or byteSize.toLong()
 
         /** 取一个 capacity ≥ [byteSize] 的 direct buffer（LITTLE_ENDIAN，位置归零）。 */
-        fun acquire(byteSize: Int): ByteBuffer {
+        fun acquire(byteSize: Int, slot: Int = 0): ByteBuffer {
             require(byteSize > 0) { "byteSize 必须为正" }
-            val map = local.get() ?: HashMap<Int, ByteBuffer>().also { local.set(it) }
-            val buf = map[byteSize]
+            val k = key(slot, byteSize)
+            val map = local.get() ?: HashMap<Long, ByteBuffer>().also { local.set(it) }
+            val buf = map[k]
             if (buf != null) {
                 buf.clear()
                 return buf
             }
             val fresh = ByteBuffer.allocateDirect(byteSize).order(ByteOrder.LITTLE_ENDIAN)
-            map[byteSize] = fresh
+            map[k] = fresh
             return fresh
         }
 
@@ -215,6 +233,9 @@ object ImagePipelineBridge {
 
     /** 一次主色调提取的结果：颜色（`0xRRGGBB`）+ 实际走的路径。 */
     class DominantOutcome(val color: Int, val usedNative: Boolean)
+
+    /** 一次盒式模糊的结果：结果位图 + 实际走的路径。M5 对标基准据此区分两条路径。 */
+    class BlurOutcome(val bitmap: Bitmap?, val usedNative: Boolean)
 
     /**
      * 降采样（面向调用方）。[preferNative]=true 时优先走 Rust，[available] 为 false
@@ -302,5 +323,61 @@ object ImagePipelineBridge {
             JavaFallback.dominantColor(srcArray, w, h)
         }.getOrElse { -1 }
         return DominantOutcome(color, usedNative = false)
+    }
+
+    /**
+     * 盒式模糊（面向调用方）。语义同 [downscale]：native 优先、可强制、失败回退。
+     * 返回 null 表示位图尺寸非法或两条路径都失败。
+     *
+     * ─── 与 downscale 的关键差异：输入输出同尺寸 ───
+     *
+     * downscale 的 src/dst 尺寸不同，天然不会拿到同一块池缓冲；而 blur 的
+     * 输入输出像素数相同。若两条 acquire 都命中同一个字节数，就会拿到同一块
+     * direct buffer，破坏 Rust 侧「输入输出不别名」的契约（结果会自读自写地错）。
+     * 因此这里显式用**不同的 pool slot**（0 给输入、1 给输出），见 [RgbaBufferPool]。
+     *
+     * ⚠️ M5 的定位：这条 CPU 路径的价值不是「替代屏幕上的模糊」（那是
+     * `RenderEffect`/GPU 的活），而是「你确实需要拿到模糊后的**像素**」——
+     * 离屏/离线处理、要再喂给别的算法、要写盘或当数据用。详见
+     * `NOTES-rust-blur-m5.md` 的分工建议。
+     */
+    fun blur(bitmap: Bitmap, radius: Int, preferNative: Boolean = true): Bitmap? =
+        blurOutcome(bitmap, radius, preferNative).bitmap
+
+    fun blurOutcome(bitmap: Bitmap, radius: Int, preferNative: Boolean = true): BlurOutcome {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0 || radius < 0) return BlurOutcome(null, usedNative = false)
+        val byteSize = w * h * 4
+
+        // 输入与输出用**不同的** direct buffer（不同 slot）：Rust 侧假设二者不别名。
+        val srcBytes = RgbaBufferPool.acquire(byteSize, slot = 0)
+        readPixels(bitmap, srcBytes)
+        val dstBytes = RgbaBufferPool.acquire(byteSize, slot = 1)
+
+        val useNative = preferNative && available
+        val ok: Boolean
+        if (useNative) {
+            val rc = ImagePipelineNative.blurBox(srcBytes, w, h, dstBytes, radius)
+            ok = rc == 0
+            if (!ok) Log.w(TAG, "native blurBox 返回 $rc，回退 Java 实现")
+        } else {
+            // Java 路径：把 direct 输入倒进 ByteArray（参考实现只吃 ByteArray），
+            // 结果再倒回 direct 输出。这次拷贝是真实成本，基准里要如实计入。
+            val srcArray = ByteArray(byteSize).also { srcBytes.rewind(); srcBytes.get(it) }
+            val outArray = ByteArray(byteSize)
+            ok = runCatching {
+                JavaFallback.blurBox(srcArray, w, h, outArray, radius)
+            }.isSuccess
+            if (ok) {
+                dstBytes.clear()
+                dstBytes.put(outArray)
+            }
+        }
+        if (!ok) return BlurOutcome(null, usedNative = false)
+
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        writePixels(out, dstBytes)
+        return BlurOutcome(out, usedNative = useNative)
     }
 }

@@ -83,7 +83,6 @@ pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative
 }
 
 /// `dominantColor(ByteBuffer src, int w, int h): int`
-///
 /// 主色调提取。成功返回 `0x00RRGGBB`，失败返回负错误码。
 ///
 /// 返回 `jint` 而非对象：避免在 JNI 边界上构造/回收 Java 对象。颜色值本身
@@ -143,6 +142,38 @@ pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative
         };
         let (r, g, b, a) = (bytes[0], bytes[1], bytes[2], bytes[3]);
         ((r as i32) << 24) | ((g as i32) << 16) | ((b as i32) << 8) | (a as i32)
+    })
+}
+
+/// `blurBox(ByteBuffer src, int w, int h, ByteBuffer dst, int radius): int`
+///
+/// 盒式模糊。成功 0，失败 [`ERR_BAD_ARGUMENT`]。
+#[no_mangle]
+pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative_blurBox(
+    env: JNIEnv,
+    _class: JClass,
+    src: JByteBuffer,
+    w: jint,
+    h: jint,
+    dst: JByteBuffer,
+    radius: jint,
+) -> jint {
+    guard(|| {
+        if w <= 0 || h <= 0 || radius < 0 {
+            return ERR_BAD_ARGUMENT;
+        }
+        let src_bytes = match unsafe { direct_bytes(&env, &src) } {
+            Some(b) => b,
+            None => return ERR_BAD_ARGUMENT,
+        };
+        let dst_bytes = match unsafe { direct_bytes_mut(&env, &dst) } {
+            Some(b) => b,
+            None => return ERR_BAD_ARGUMENT,
+        };
+        match imagepipeline::blur::blur_box(src_bytes, w as u32, h as u32, dst_bytes, radius as u32) {
+            Ok(()) => 0,
+            Err(_) => ERR_BAD_ARGUMENT,
+        }
     })
 }
 

@@ -85,4 +85,14 @@ internal object ImagePipelineNative {
      * JNI 边界增加 Java 对象的构造/回收成本。
      */
     external fun dominantColor(src: ByteBuffer, w: Int, h: Int): Int
+
+    /**
+     * 盒式模糊：RGBA8888 的 [src]（[w]×[h]）→ [dst]（同尺寸），[radius] 为半径。
+     *
+     * 输入/输出都是 direct buffer，且**必须不是同一块内存**（Rust 侧假设二者不别名；
+     * bridge 里用不同的 pool slot 保证）。成功返回 0，失败返回负数。
+     * `radius == 0` 时为直接拷贝。算法权威定义见 `rust/imagepipeline/src/blur.rs::blur_box`
+     * 与 [ImagePipelineReference.blurBox]（两者必须逐位一致）。
+     */
+    external fun blurBox(src: ByteBuffer, w: Int, h: Int, dst: ByteBuffer, radius: Int): Int
 }

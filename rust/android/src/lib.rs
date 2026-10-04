@@ -45,7 +45,8 @@ pub const ERR_PANIC: i32 = -2;
 /// 变更记录：
 ///   1 → M1：abiVersion / versionString / probeLayout
 ///   2 → M2：新增 downscaleArea / dominantColor
-pub const ABI_VERSION: i32 = 2;
+///   3 → M5：新增 blurBox
+pub const ABI_VERSION: i32 = 3;
 
 /// 本 crate 的日志前缀，便于 logcat 过滤。
 pub const LOG_TAG: &str = "ImagePipelineNative";

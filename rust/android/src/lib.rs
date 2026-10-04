@@ -41,7 +41,11 @@ pub const ERR_PANIC: i32 = -2;
 ///
 /// Kotlin 侧在加载库后应比对一次：native 与 Java 版本不匹配时，
 /// 宁可「明确报错」也不要「用错布局静默算错」。这是 native 升级的常规防线。
-pub const ABI_VERSION: i32 = 1;
+///
+/// 变更记录：
+///   1 → M1：abiVersion / versionString / probeLayout
+///   2 → M2：新增 downscaleArea / dominantColor
+pub const ABI_VERSION: i32 = 2;
 
 /// 本 crate 的日志前缀，便于 logcat 过滤。
 pub const LOG_TAG: &str = "ImagePipelineNative";

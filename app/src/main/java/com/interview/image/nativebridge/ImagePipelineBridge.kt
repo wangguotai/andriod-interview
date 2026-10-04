@@ -42,8 +42,14 @@ object ImagePipelineBridge {
 
     private const val TAG = "ImagePipeline"
 
-    /** 与 Rust 侧 `imagepipeline_android::ABI_VERSION` 对齐；不匹配说明 APK 里是旧 .so。 */
-    const val EXPECTED_ABI_VERSION = 1
+    /**
+     * 与 Rust 侧 `imagepipeline_android::ABI_VERSION` 对齐；不匹配说明 APK 里是旧 .so。
+     *
+     * 变更记录：1 → M1（probeLayout）；2 → M2（新增 downscaleArea / dominantColor）。
+     * 升级到 2 的意义：若 APK 里残留只导出 M1 符号的旧 .so，`available` 会因版本
+     * 不匹配而判 false，从而**显式降级**，而不是在调用新符号时抛 `UnsatisfiedLinkError`。
+     */
+    const val EXPECTED_ABI_VERSION = 2
 
     /**
      * native 库是否加载且 ABI 匹配。
@@ -142,5 +148,159 @@ object ImagePipelineBridge {
                 ((data[i + 2].toInt() and 0xFF) shl 8) or
                 (data[i + 3].toInt() and 0xFF)
         }
+
+        /**
+         * 参考实现降采样。这里只做一层转发，算法本体在 [ImagePipelineReference]。
+         *
+         * 为什么不把算法直接写在这里：这两个方法要同时服务设备端回退与 JVM 单测，
+         * 而本 object 所在的 [ImagePipelineBridge] 引用了 `android.graphics.Bitmap`，
+         * 在 JVM 单测里加载即失败。转发到纯 Kotlin 文件后，回退路径与对拍金标准
+         * 共用同一份代码，永远不会出现「回退实现和对拍实现漂移」。
+         */
+        fun downscaleArea(
+            src: ByteArray,
+            srcW: Int,
+            srcH: Int,
+            dst: ByteArray,
+            dstW: Int,
+            dstH: Int,
+        ) = ImagePipelineReference.downscaleArea(src, srcW, srcH, dst, dstW, dstH)
+
+        /** 参考实现主色调，返回 `0x00RRGGBB`。算法见 [ImagePipelineReference.dominantColor]。 */
+        fun dominantColor(src: ByteArray, w: Int, h: Int): Int =
+            ImagePipelineReference.dominantColor(src, w, h)
+    }
+
+    /**
+     * direct buffer 缓冲池。
+     *
+     * ─── 为什么必须复用，而不是每次 `allocateDirect` ───
+     *
+     * direct buffer 的内存不在 Java 堆上，分配要走系统调用、回收要依赖 Cleaner
+     * 且不确定何时发生。在「每张图都要读一次像素」的路径上，每次 new 一个 direct
+     * buffer 会把分配/回收成本摊进耗时 —— M3 的基准结论会因此被污染（对比的变成
+     * 了分配器而不是算法）。这里按「字节数」缓存并复用，尺寸不同才扩容。
+     *
+     * 用 [ThreadLocal] 而不是全局池：池里的 buffer 会被 `copyPixelsToBuffer` 等
+     * 原地读写，多线程共享需要加锁；而 JNI 调用天然按线程使用，ThreadLocal 既
+     * 免锁又天然隔离。代价是每个线程各留一份（本场景线程数极少，可接受）。
+     *
+     * 返回的 buffer 已 rewind，capacity 可能大于请求值 —— 调用方仍应按实际
+     * 像素数（w*h*4）解读，多出的尾部字节不参与运算。
+     */
+    object RgbaBufferPool {
+        private val local: ThreadLocal<HashMap<Int, ByteBuffer>> =
+            ThreadLocal.withInitial { HashMap<Int, ByteBuffer>() }
+
+        /** 取一个 capacity ≥ [byteSize] 的 direct buffer（LITTLE_ENDIAN，位置归零）。 */
+        fun acquire(byteSize: Int): ByteBuffer {
+            require(byteSize > 0) { "byteSize 必须为正" }
+            val map = local.get() ?: HashMap<Int, ByteBuffer>().also { local.set(it) }
+            val buf = map[byteSize]
+            if (buf != null) {
+                buf.clear()
+                return buf
+            }
+            val fresh = ByteBuffer.allocateDirect(byteSize).order(ByteOrder.LITTLE_ENDIAN)
+            map[byteSize] = fresh
+            return fresh
+        }
+
+        /** 释放当前线程持有的所有缓冲（测试收尾/长驻线程退出时调用，非必需）。 */
+        fun clear() = local.get()?.clear()
+    }
+
+    /** 一次降采样的结果：结果位图 + 实际走的路径，供 M3 做公平对比时区分。 */
+    class DownscaleOutcome(val bitmap: Bitmap?, val usedNative: Boolean)
+
+    /** 一次主色调提取的结果：颜色（`0xRRGGBB`）+ 实际走的路径。 */
+    class DominantOutcome(val color: Int, val usedNative: Boolean)
+
+    /**
+     * 降采样（面向调用方）。[preferNative]=true 时优先走 Rust，[available] 为 false
+     * 或 native 返回负数（如缓冲不足）时回退到 [JavaFallback]。返回 null 表示
+     * 输入位图/尺寸非法（native 与 Java 都拒绝的情况）。
+     *
+     * M3 基准需要**强制**只跑一条路径：传 `preferNative=false` 即纯 Java，
+     * 传 `true` 在 native 可用时即纯 Rust。返回 [DownscaleOutcome] 的版本可用来
+     * 断言「我这次确实跑的是我以为的那条路径」——避免基准测了半天其实是回退。
+     */
+    fun downscale(
+        bitmap: Bitmap,
+        dstW: Int,
+        dstH: Int,
+        preferNative: Boolean = true,
+    ): Bitmap? = downscaleOutcome(bitmap, dstW, dstH, preferNative).bitmap
+
+    fun downscaleOutcome(
+        bitmap: Bitmap,
+        dstW: Int,
+        dstH: Int,
+        preferNative: Boolean = true,
+    ): DownscaleOutcome {
+        val srcW = bitmap.width
+        val srcH = bitmap.height
+        if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) {
+            return DownscaleOutcome(null, usedNative = false)
+        }
+        val srcBytes = RgbaBufferPool.acquire(srcW * srcH * 4)
+        readPixels(bitmap, srcBytes)
+
+        val useNative = preferNative && available
+        val outcome = ByteArray(dstW * dstH * 4)
+        val ok: Boolean
+        if (useNative) {
+            // 输入输出用**不同的** direct buffer：Rust 侧假设二者不别名。
+            val dstBytes = RgbaBufferPool.acquire(dstW * dstH * 4)
+            val rc = ImagePipelineNative.downscaleArea(srcBytes, srcW, srcH, dstBytes, dstW, dstH)
+            ok = rc == 0
+            if (ok) {
+                dstBytes.rewind()
+                dstBytes.get(outcome, 0, outcome.size)
+            } else {
+                Log.w(TAG, "native downscaleArea 返回 $rc，回退 Java 实现")
+            }
+        } else {
+            val srcArray = ByteArray(srcW * srcH * 4).also { srcBytes.rewind(); srcBytes.get(it) }
+            ok = runCatching {
+                JavaFallback.downscaleArea(srcArray, srcW, srcH, outcome, dstW, dstH)
+            }.isSuccess
+        }
+        if (!ok) return DownscaleOutcome(null, usedNative = false)
+
+        val out = Bitmap.createBitmap(dstW, dstH, Bitmap.Config.ARGB_8888)
+        // 用 direct buffer 写回（与读像素同一套约定，避免 ByteArray→IntArray 的通道重排）。
+        val writeBuf = RgbaBufferPool.acquire(outcome.size)
+        writeBuf.put(outcome)
+        writePixels(out, writeBuf)
+        return DownscaleOutcome(out, usedNative = useNative)
+    }
+
+    /**
+     * 主色调（面向调用方）。语义同 [downscale]：native 优先、可强制、失败回退。
+     * 失败（尺寸非法）时返回 `-1`（合法颜色恒为非负）。
+     */
+    fun dominantColor(bitmap: Bitmap, preferNative: Boolean = true): Int =
+        dominantColorOutcome(bitmap, preferNative).color
+
+    fun dominantColorOutcome(bitmap: Bitmap, preferNative: Boolean = true): DominantOutcome {
+        val w = bitmap.width
+        val h = bitmap.height
+        if (w <= 0 || h <= 0) return DominantOutcome(-1, usedNative = false)
+
+        val buf = RgbaBufferPool.acquire(w * h * 4)
+        readPixels(bitmap, buf)
+
+        val useNative = preferNative && available
+        if (useNative) {
+            val rc = ImagePipelineNative.dominantColor(buf, w, h)
+            if (rc >= 0) return DominantOutcome(rc, usedNative = true)
+            Log.w(TAG, "native dominantColor 返回 $rc，回退 Java 实现")
+        }
+        val srcArray = ByteArray(w * h * 4).also { buf.rewind(); buf.get(it) }
+        val color = runCatching {
+            JavaFallback.dominantColor(srcArray, w, h)
+        }.getOrElse { -1 }
+        return DominantOutcome(color, usedNative = false)
     }
 }

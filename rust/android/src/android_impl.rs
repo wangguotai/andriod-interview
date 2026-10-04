@@ -11,10 +11,10 @@ use jni::JNIEnv;
 
 use crate::{guard, ABI_VERSION, ERR_BAD_ARGUMENT, ERR_PANIC, LOG_TAG};
 
-/// 读取 direct buffer 的全部字节。
+/// 读取 direct buffer 的只读字节视图。
 ///
 /// 安全性：调用方保证 `buf` 是一个 direct `ByteBuffer`（Kotlin 侧由
-/// `Bitmap.copyPixelsToBuffer` 的入参类型约束）。返回的指针在调用期间有效，
+/// `Bitmap.copyPixelsToBuffer` 之类的入参类型约束）。返回的指针在调用期间有效，
 /// 我们只读、不持有。
 unsafe fn direct_bytes<'a>(env: &JNIEnv, buf: &JByteBuffer) -> Option<&'a [u8]> {
     let addr = env.get_direct_buffer_address(buf).ok()?;
@@ -23,6 +23,91 @@ unsafe fn direct_bytes<'a>(env: &JNIEnv, buf: &JByteBuffer) -> Option<&'a [u8]> 
         return None;
     }
     Some(unsafe { std::slice::from_raw_parts(addr, cap) })
+}
+
+/// 读取 direct buffer 的可写字节视图（用于把结果写回调用方的缓冲）。
+///
+/// 安全性：同 [`direct_bytes`]。额外要求调用方保证没有其他别名同时读写这段内存 ——
+/// 这正是流水线「一次调用、输入输出分离」的契约：Kotlin 侧传入不同的两个 buffer。
+unsafe fn direct_bytes_mut<'a>(env: &JNIEnv, buf: &JByteBuffer) -> Option<&'a mut [u8]> {
+    let addr = env.get_direct_buffer_address(buf).ok()?;
+    let cap = env.get_direct_buffer_capacity(buf).ok()?;
+    if addr.is_null() || cap == 0 {
+        return None;
+    }
+    Some(unsafe { std::slice::from_raw_parts_mut(addr, cap) })
+}
+
+/// `downscaleArea(ByteBuffer src, int sw, int sh, ByteBuffer dst, int dw, int dh): int`
+///
+/// 区域平均降采样。成功返回 0，失败返回 [`ERR_BAD_ARGUMENT`]。
+///
+/// 设计要点：**输入与输出都是调用方持有的 direct buffer**，本函数不做任何
+/// Java 堆分配、不创建新对象。这样每张图只有 1 次 JNI 调用、0 次拷贝，
+/// 也是「Rust 版为什么可能更快」的主要来源之一（而不是「Rust 语言本身快」）。
+#[no_mangle]
+pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative_downscaleArea(
+    env: JNIEnv,
+    _class: JClass,
+    src: JByteBuffer,
+    sw: jint,
+    sh: jint,
+    dst: JByteBuffer,
+    dw: jint,
+    dh: jint,
+) -> jint {
+    guard(|| {
+        if sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 {
+            return ERR_BAD_ARGUMENT;
+        }
+        let src_bytes = match unsafe { direct_bytes(&env, &src) } {
+            Some(b) => b,
+            None => return ERR_BAD_ARGUMENT,
+        };
+        let dst_bytes = match unsafe { direct_bytes_mut(&env, &dst) } {
+            Some(b) => b,
+            None => return ERR_BAD_ARGUMENT,
+        };
+        match imagepipeline::downscale::downscale_area(
+            src_bytes,
+            sw as u32,
+            sh as u32,
+            dst_bytes,
+            dw as u32,
+            dh as u32,
+        ) {
+            Ok(()) => 0,
+            Err(_) => ERR_BAD_ARGUMENT,
+        }
+    })
+}
+
+/// `dominantColor(ByteBuffer src, int w, int h): int`
+///
+/// 主色调提取。成功返回 `0x00RRGGBB`，失败返回负错误码。
+///
+/// 返回 `jint` 而非对象：避免在 JNI 边界上构造/回收 Java 对象。颜色值本身
+/// 只占 24 位，塞得进 `int`；用负数表示错误码，调用方判断 `< 0` 即可。
+#[no_mangle]
+pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative_dominantColor(
+    env: JNIEnv,
+    _class: JClass,
+    src: JByteBuffer,
+    w: jint,
+    h: jint,
+) -> jint {
+    guard(|| {
+        if w <= 0 || h <= 0 {
+            return ERR_BAD_ARGUMENT;
+        }
+        let bytes = match unsafe { direct_bytes(&env, &src) } {
+            Some(b) if b.len() >= (w as usize * h as usize * 4) => b,
+            _ => return ERR_BAD_ARGUMENT,
+        };
+        let needed = w as usize * h as usize * 4;
+        let d = imagepipeline::dominant::dominant_color(&bytes[..needed]);
+        d.rgb as jint
+    })
 }
 
 /// `abiVersion(): int` —— ABI 版本号，Kotlin 侧加载后比对用。

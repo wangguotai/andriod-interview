@@ -60,4 +60,29 @@ internal object ImagePipelineNative {
      * 跨 FFI 的宽度转换就少一类「静默错位」。Kotlin 侧比较时直接用 `Int` 常量。
      */
     external fun probeLayout(buffer: ByteBuffer): Int
+
+    /**
+     * 区域平均降采样：RGBA8888 的 [src]（[srcW]×[srcH]）→ [dst]（[dstW]×[dstH]）。
+     *
+     * 输入/输出都是 direct buffer；成功返回 0，失败返回负数。
+     * 算法权威定义见 `rust/imagepipeline/src/downscale.rs` 与
+     * [ImagePipelineReference.downscaleArea]（两者必须逐位一致）。
+     */
+    external fun downscaleArea(
+        src: ByteBuffer,
+        srcW: Int,
+        srcH: Int,
+        dst: ByteBuffer,
+        dstW: Int,
+        dstH: Int,
+    ): Int
+
+    /**
+     * 主色调提取：RGBA8888 的 [src]（[w]×[h]）→ `0x00RRGGBB`。
+     *
+     * 成功返回 24 位颜色（**0 是合法的黑色**），失败返回负数 —— 因此判断失败
+     * 必须用 `< 0`，不能用 `== 0` 或 `<= 0`。返回 `Int` 而非对象，是为了不给
+     * JNI 边界增加 Java 对象的构造/回收成本。
+     */
+    external fun dominantColor(src: ByteBuffer, w: Int, h: Int): Int
 }

@@ -25,6 +25,9 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+pub mod dominant;
+pub mod downscale;
+
 /// 单像素字节数（RGBA8888）。
 pub const BYTES_PER_PIXEL: usize = 4;
 

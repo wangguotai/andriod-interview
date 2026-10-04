@@ -1,0 +1,5 @@
+# 抓到的 trace 体积可达数十 MB，不入库；用 record-scroll.sh 随时重抓
+out/
+
+# analyze_trace.py 在本地缺少 trace_processor_shell 时自动下载到这里
+bin/

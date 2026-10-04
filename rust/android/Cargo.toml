@@ -1,0 +1,23 @@
+[package]
+name = "imagepipeline_android"
+version = "0.1.0"
+edition = "2021"
+description = "imagepipeline 的 JNI 绑定层：只做类型转换与缓冲管理，不含算法"
+license = "MIT"
+
+[lib]
+# cdylib：产出 libimagepipeline.so，由 System.loadLibrary 加载
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+imagepipeline = { path = "../imagepipeline" }
+
+# jni crate 只在 Android 目标下拉入；宿主平台 cargo test 不需要它。
+# 依赖越少，交叉编译越不容易在 NDK 上翻车。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }
+
+[profile.release]
+lto = true
+codegen-units = 1
+# 教学场景下保留 stack unwind 便于定位；若追求体积可改 "abort"。

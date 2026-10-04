@@ -1,0 +1,10 @@
+[package]
+name = "imagepipeline"
+version = "0.1.0"
+edition = "2021"
+description = "纯计算图像流水线内核（零 Android / JNI 依赖，可在宿主平台 cargo test）"
+license = "MIT"
+
+[lib]
+# rlib：给 android crate 链接用；同时让本机 cargo test 可跑
+crate-type = ["rlib"]

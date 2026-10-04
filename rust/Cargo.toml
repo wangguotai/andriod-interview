@@ -1,0 +1,8 @@
+# 虚拟 workspace：统一 target/ 目录与 Cargo.lock，避免每个 crate 各建一份。
+#
+# 这里刻意用 workspace 而不是各自独立：
+#   - 一份 Cargo.lock → 依赖版本可复现（native 锁版本的必要性不亚于 Gradle）
+#   - 一份 target/    → 宿主编译与交叉编译的中间产物集中，磁盘与增量编译都更友好
+[workspace]
+resolver = "2"
+members = ["imagepipeline", "android"]

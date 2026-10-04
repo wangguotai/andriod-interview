@@ -1,0 +1,3 @@
+# Rust 交叉编译 target 目录（每 crate 一份 + workspace 一份），不入库
+/target/
+/**/target/

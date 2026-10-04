@@ -4,6 +4,18 @@
     android:layout_height="wrap_content"
     android:layout_margin="4dp">
 
+    <!-- ══════════════ Rust 主色调占位色 ══════════════
+         铺在 ImageView 之下，由 WaterfallAdapter 用 PlaceholderPalette 的结果填色。
+         为什么独立成一个 View 而不是直接给 ImageView 设 background/tint：
+         tint 会参与图片绘制、改变真实颜色；占位色的语义是「图未到，先垫一层」，
+         图片一画上来必须完全遮住它。独立垫底是唯一不会产生意外的做法。
+         尺寸与 ImageView 一致（match_parent × 240dp），避免露出边缘。 -->
+    <View
+        android:id="@+id/v_palette"
+        android:layout_width="match_parent"
+        android:layout_height="240dp"
+        android:visibility="gone" />
+
     <ImageView
         android:id="@+id/iv_image"
         android:layout_width="match_parent"

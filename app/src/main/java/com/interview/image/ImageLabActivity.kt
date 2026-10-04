@@ -64,6 +64,7 @@ class ImageLabActivity : AppCompatActivity() {
     private lateinit var pbGraphics: ProgressBar
     private lateinit var swRawSize: Switch
     private lateinit var swAutoLoad: Switch
+    private lateinit var swPlaceholder: Switch
 
     private lateinit var memSampler: MemoryProbe.Sampler
 
@@ -88,6 +89,7 @@ class ImageLabActivity : AppCompatActivity() {
         pbGraphics = findViewById(R.id.pb_graphics)
         swRawSize = findViewById(R.id.sw_raw_size)
         swAutoLoad = findViewById(R.id.sw_auto_load)
+        swPlaceholder = findViewById(R.id.sw_placeholder)
         recyclerView = findViewById(R.id.rv_images)
 
         // 瀑布流的关键：2 列 + 每张图自己的高度 → 参差错落的目标尺寸
@@ -217,6 +219,21 @@ class ImageLabActivity : AppCompatActivity() {
             Log.i(TAG, if (checked) "自动加载下一页：开" else "自动加载下一页：关（改用底部按钮手动翻页）")
         }
 
+        swPlaceholder.setOnCheckedChangeListener { _, checked ->
+            adapter.placeholderMode = checked
+            if (!checked) {
+                // 关掉时清缓存，保证「关 → 开」是一次干净的对比，而不是捡上一轮的缓存结果
+                PlaceholderPalette.clear()
+                adapter.resetPaletteStats()
+            }
+            Log.i(
+                TAG,
+                if (checked) "Rust 主色调占位色：开（图片**再次**出现时铺底色）"
+                else "Rust 主色调占位色：关",
+            )
+            replay()
+        }
+
         findViewById<Button>(R.id.btn_open_inspector).setOnClickListener {
             startActivity(Intent(this, DecodeInspectorActivity::class.java))
         }
@@ -306,7 +323,11 @@ class ImageLabActivity : AppCompatActivity() {
     }
 
     private fun renderLedger() {
-        tvLedger.text = DecodeLedger.summary()
+        tvLedger.text = buildString {
+            append(DecodeLedger.summary())
+            append('\n')
+            append(adapter.paletteSummary())
+        }
     }
 
     override fun onResume() {

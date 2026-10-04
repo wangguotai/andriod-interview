@@ -77,6 +77,34 @@ class WaterfallAdapter(
      */
     var rawSizeMode: Boolean = false
 
+    /**
+     * Rust 主色调占位色开关。
+     *
+     * ─── 这个开关为什么做成可关闭 ───
+     *
+     * 它是 M4 端到端复测的**唯一变量**：开着与关着跑同一段滚动，
+     * 其余条件完全不变，Perfetto 的对比才有意义。若不给开关，
+     * 「接入前/接入后」就得靠切 commit 重新装机，引入的差异（构建、缓存状态）
+     * 会让结论没法归因。
+     *
+     * ⚠️ 关于这个功能**能**与**不能**带来什么（避免误解成"性能优化"）：
+     * - 能：图片解码完成后，用 Rust 算一次主色调并缓存；该图**再次出现**时
+     *   （滑走再滑回、或同一 id 重新 bind）立刻铺上底色，不再闪一下灰底。
+     * - 不能：**首次**加载时没有占位色 —— 因为主色调来自已解码的位图，
+     *   图还没解码就没有位图。要做到首屏就有色，得让上游（网络/解码）
+     *   先给一张极小的图，那是另一条链路（缩略图/BlurHash）的事。
+     *
+     * 把这条边界写在注释里很重要：不然极易被当成"Rust 让图片显示更快了"，
+     * 而它其实只影响**重复出现**时的观感。
+     */
+    var placeholderMode: Boolean = false
+
+    /** 统计：主色调计算里实际走 Rust / Java 各多少次（结论里要引用）。 */
+    var paletteNativeCount = 0
+        private set
+    var paletteJavaCount = 0
+        private set
+
     /** item 之间的间距，计算目标宽度时要从列宽里扣掉（与 XML 里的 margin 保持一致） */
     private val itemMarginPx = 4f
 
@@ -158,6 +186,23 @@ class WaterfallAdapter(
         holder.badge.text = ""
         holder.state.text = "原图 ${spec.originalWidth} × ${spec.originalHeight}"
 
+        // ── Rust 主色调占位色 ──
+        // 分两种情况：已有缓存（上次算过）就立即铺色；没有就先把底色清成灰，
+        // 等这一轮解码完成后再由 onResourceReady 里算（只对**重复出现**有意义）。
+        // 注意 holder.palette 的画法：给 ImageView 上 tint 会污染真实图片的显示，
+        // 所以用一个独立的 View 铺在图片下方。
+        if (placeholderMode) {
+            val cached = PlaceholderPalette.peek(spec.id)
+            if (cached != null) {
+                holder.palette.setBackgroundColor(cached)
+                holder.palette.visibility = View.VISIBLE
+            } else {
+                holder.palette.visibility = View.GONE
+            }
+        } else {
+            holder.palette.visibility = View.GONE
+        }
+
         // ── 输入侧：把"这次请求的目标尺寸"直接写出来 ──
         // 对照组下目标尺寸就是原图本身 —— 这正是要演示的危险情形。
         holder.state.append(
@@ -217,10 +262,42 @@ class WaterfallAdapter(
 
                     // 记入累计账本：当前内存会横盘，累计值不会撒谎
                     DecodeLedger.record(resource.byteCount)
+
+                    // ── Rust 主色调：拿刚解码好的位图算一次并缓存 ──
+                    // 这一步放在 onResourceReady 里是必然的：主色调的来源就是这张
+                    // 已解码的位图。所以它算出来的色，只能让**这张图再次出现**时
+                    // 用得上 —— 首次显示仍然是"先图后无占位"，这是本方案的固有边界。
+                    if (placeholderMode) {
+                        PlaceholderPalette.extractAsync(spec.id, resource) { r ->
+                            // 回调在主线程；此刻 holder 可能已被复用给别的 spec，
+                            // 必须核对身份再写 UI —— 这是 RecyclerView 异步回调的经典坑。
+                            val bound = data.getOrNull(holder.bindingAdapterPosition)
+                            if (bound?.id == r.id) {
+                                holder.palette.setBackgroundColor(r.argb)
+                                holder.palette.visibility = View.VISIBLE
+                            }
+                            if (r.usedNative) paletteNativeCount++ else paletteJavaCount++
+                            if (!r.cached) {
+                                holder.state.append("\n占位色 #%06X (%.1fms)".format(r.argb and 0xFFFFFF, r.elapsedMs))
+                            }
+                        }
+                    }
                     return false
                 }
             })
             .into(holder.image)
+    }
+
+    /** 供 Activity 显示「主色调走了哪条路径」的证据摘要。 */
+    fun paletteSummary(): String {
+        val total = paletteNativeCount + paletteJavaCount
+        if (total == 0) return "占位色：尚无计算"
+        return "占位色：rust=$paletteNativeCount java=$paletteJavaCount（共 $total）"
+    }
+
+    fun resetPaletteStats() {
+        paletteNativeCount = 0
+        paletteJavaCount = 0
     }
 
     override fun onViewRecycled(holder: ImageHolder) {
@@ -234,5 +311,15 @@ class WaterfallAdapter(
         val image: ImageView = view.findViewById(R.id.iv_image)
         val badge: TextView = view.findViewById(R.id.tv_badge)
         val state: TextView = view.findViewById(R.id.tv_state)
+
+        /**
+         * 主色调占位色块：铺在 ImageView 之下（XML 里先于 ImageView 声明）。
+         *
+         * 为什么不直接给 ImageView 设 background 或 tint：tint 会参与图片的
+         * 实际绘制（改变真实颜色），而占位色的语义是「图片还没到，先垫一层」，
+         * 图片一旦画上来就应该完全遮住它。用一个独立 View 垫底，语义最清楚，
+         * 也不会在图片半透明/带 alpha 时产生意外混合。
+         */
+        val palette: View = view.findViewById(R.id.v_palette)
     }
 }

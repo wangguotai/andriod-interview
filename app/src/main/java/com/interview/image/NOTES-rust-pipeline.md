@@ -128,3 +128,73 @@ adb logcat -d | grep IPBench
 ./gradlew :app:connectedDebugAndroidTest -x lint \
   -Pandroid.testInstrumentationRunnerArguments.class=com.example.myapplication.ImagePipelineGoldenTest
 ```
+
+---
+
+# M4：接入瀑布流 bind 链路 + 端到端复测
+
+> 真机 Redmi K40，`tools/perfetto/` 工具链，往返滚动 16s。
+
+## 做了什么
+
+把 Rust **主色调**算子接成瀑布流卡片的「占位底色」
+（`PlaceholderPalette` → `WaterfallAdapter` → `item_image_card.xml` 的 `v_palette`）。
+选它的理由直接来自 M3：它是唯一稳定大赢的算子（2.5×），且不随尺寸衰减。
+
+真机日志确认走的是 native：
+```
+ImageLab: 占位色 id=ii-0-0 color=#001D78 path=rust 耗时=14.40ms
+ImageLab: 占位色 id=ii-0-2 color=#A27900 path=rust 耗时=7.75ms
+...
+```
+每次 3~14ms（含 JNI 与 Bitmap 读像素），与 M3 的 512×512 ≈ 5ms 量级一致。
+
+## 端到端结论：jank **没有改善**（13 → 14 帧，即持平）
+
+| | App Deadline Missed | Buffer Stuffing |
+|---|---|---|
+| 对照组（占位色关） | **13** | 7 |
+| 实验组（占位色开） | **14** | 29 |
+
+**这个「没改善」是预期内的，而且它本身就是 M4 要交付的结论。**
+按本仓库 `INTERVIEW-perfetto.md` 的方法论，同一个 trace 里 app 主线程最耗时的
+slice 是 `traversal`(1086ms) / `inflate`(164ms) / `RV Prefetch`(287ms) /
+`RV OnLayout`(127ms) —— 滚动卡顿由**布局与预取**主导，不是像素运算。
+把像素运算换成更快的实现，自然不会移动这条曲线上的数字。
+
+**如果这里报出「jank 从 13 降到 5」，那才是需要怀疑的**：它多半意味着
+测量过程被别的东西污染了（例如两次抓取时的滚动幅度不同、缓存冷热不同）。
+
+## 但它确实带来两件事（这两件是可以证的）
+
+1. **线程归属正确**：trace 里 `rustDominantColor` 共 9 次，**全部**落在
+   `app-cpu-1..7`（`ThreadPools.cpu` 泳道），主线程命中 **0** 次。
+   总耗时 ≈ 69ms / 16s，摊在 7 条泳道线程上。
+   ```sql
+   SELECT t.name, t.is_main_thread, COUNT(*), SUM(s.dur)/1e6
+   FROM slice s JOIN thread_track tt ON s.track_id=tt.id JOIN thread t ON tt.utid=t.utid
+   WHERE s.name='rustDominantColor' GROUP BY t.utid;
+   ```
+   —— 这回答了 native 接入最容易被质疑的问题：「你是不是把重活挪回主线程了？」
+2. **观感**：图片**再次出现**时（滑走再滑回、或 recycle 后重新 bind）立刻铺底色，
+   不再闪一下灰底。
+
+## 必须写明的边界（否则这个功能会被误解）
+
+**首次加载时没有占位色。** 因为主色调的来源就是「已解码的位图」——
+图没解码就没有像素可算，也就不可能先有颜色。要让首屏就有色，得让上游先给一张
+极小图（缩略图 / BlurHash / ThumbHash），那是另一条链路，**不在本次范围内**。
+
+所以本功能的准确描述是：**「重复出现时的观感改善」，不是「首屏加载更快」。**
+
+## 复现方式
+
+```bash
+# 两态对照（脚本自动：起 perfetto → 启页面 → 切换开关 → 往返滚动 → 拉回 trace）
+SERIAL=<serial> tools/perfetto/m4-placeholder-compare.sh on  tools/perfetto/out/m4-on.perfetto
+SKIP_TAP=1 SERIAL=<serial> tools/perfetto/m4-placeholder-compare.sh off tools/perfetto/out/m4-off.perfetto
+
+# 归因
+python3 tools/perfetto/analyze_trace.py tools/perfetto/out/m4-off.perfetto --pkg com.example.myapplication
+```
+

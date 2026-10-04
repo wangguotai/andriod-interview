@@ -63,11 +63,16 @@ class ImageLabActivity : AppCompatActivity() {
     private lateinit var tvLedger: TextView
     private lateinit var pbGraphics: ProgressBar
     private lateinit var swRawSize: Switch
+    private lateinit var swAutoLoad: Switch
 
     private lateinit var memSampler: MemoryProbe.Sampler
 
     /** 已请求过的页码；切 overct 对照时必须重放，否则缓存命中看不出差异 */
     private var loadedPages = 0
+
+    /** 自动翻页是否已放行；见 maybeAutoLoad 的说明 */
+    private var autoLoadReleased = false
+    private var autoLoadPending = false
 
     /** 上一次采样的 graphics PSS，用来算增量 —— 增量比绝对值更能说明"这一屏花了多少" */
     private var lastGraphicsKb = 0
@@ -82,6 +87,7 @@ class ImageLabActivity : AppCompatActivity() {
         tvLedger = findViewById(R.id.tv_ledger)
         pbGraphics = findViewById(R.id.pb_graphics)
         swRawSize = findViewById(R.id.sw_raw_size)
+        swAutoLoad = findViewById(R.id.sw_auto_load)
         recyclerView = findViewById(R.id.rv_images)
 
         // 瀑布流的关键：2 列 + 每张图自己的高度 → 参差错落的目标尺寸
@@ -133,15 +139,83 @@ class ImageLabActivity : AppCompatActivity() {
             // 布局还没结束就填数据会被"吞掉"，必须等到下一帧
             recyclerView.post {
                 if (loadedPages == 0) loadNextPage()
+                // 首屏补齐后再放行自动翻页：onCreate 里 RecyclerView 宽度还是 0，
+                // 此刻若触发翻页，adapter 的目标宽度会退化成 1px（见 WaterfallAdapter.columnWidthPx）
+                autoLoadReleased = true
             }
         }
 
+        bindAutoLoad()
         bindControls()
         startMemorySampler()
     }
 
+    /**
+     * 滚动到底自动加载下一页。
+     *
+     * ─── 为什么不是简单地"最后一条可见就 loadNextPage"───
+     *
+     * 有三个必须处理的点，任何一个漏掉都会在教学里制造假象：
+     *
+     * 1. **`loadNextPage` 要等到布局完成**。onCreate 里 RecyclerView 宽度还是 0，
+     *    此时触发的 adapter.submit 会让目标宽度退化成 1px（见 WaterfallAdapter.columnWidthPx
+     *    注释里的那个坑）。所以用 autoLoadReleased 把首屏之后的翻页放行。
+     * 2. **触底判定要跨两列**。StaggeredGridLayoutManager 不能只看 findLastVisibleItemPositions()[0]。
+     *    它返回的是**每个 span 各自最后可见的 position**，两个 span 拼接顺序在该 API 上
+     *    不做保证，必须取 max 才是"整屏最靠下的 item"。取 min 或取 [0] 都会在
+     *    一侧先到底时就提前翻页，出现"还没滑到底就跳下一页"。
+     * 3. **节流**。滚动中 onScrolled 每帧都回调，不加约束会在一次甩动里连翻好几页
+     *    （最后一屏的 item 在整个甩动过程中都可见）。两道闸门：
+     *    · `autoLoadPending` —— 一帧内只排一次 post，避免同一帧连排多次；
+     *    · post 内**重新判定**触底 —— `loadNextPage()` 是同步的，itemCount 立刻增加，
+     *      于是本帧后续的 onScrolled 不再满足阈值，直到用户真的又滑下去。
+     *    两者合起来把"连续回调"收敛成"每越过一次阈值只翻一页"。
+     *
+     * 预加载阈值 [AUTO_LOAD_THRESHOLD]：还剩 4 个 item 就提前加载，
+     * 这样加载动作发生在用户滑到底之前，滚动手感是连续的（而不是到底后干等一帧）。
+     */
+    private fun bindAutoLoad() {
+        recyclerView.addOnScrollListener(object : RecyclerView.OnScrollListener() {
+            override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                maybeAutoLoad()
+            }
+        })
+    }
+
+    private fun maybeAutoLoad() {
+        if (!swAutoLoad.isChecked) return
+        if (!autoLoadReleased) return
+        if (loadedPages == 0) return // 首屏还没填，避免与首屏加载竞态
+        if (autoLoadPending) return  // 已经排了一帧，避免一次甩动里连排多次
+
+        val lm = recyclerView.layoutManager as? StaggeredGridLayoutManager ?: return
+        val lastPos = lm.findLastVisibleItemPositions(null).maxOrNull() ?: return
+
+        if (lastPos < adapter.itemCount - 1 - AUTO_LOAD_THRESHOLD) return
+
+        // ★ 必须推迟到下一帧：onScrolled 可能跑在 measure/layout 遍历里，
+        //   此时改 adapter 会命中 RecyclerView.assertNotInLayoutOrScroll 的告警
+        //   （日志：Cannot call this method in a scroll callback...）。
+        //   这是本页注释里反复强调的"布局中改数据"的同一类坑，只是触发路径不同。
+        autoLoadPending = true
+        recyclerView.post {
+            autoLoadPending = false
+            if (!swAutoLoad.isChecked || !autoLoadReleased) return@post
+            // 重新判定一次：这一帧期间用户可能已经滑离底部（或别的路径刚好加载完了）
+            val pos = lm.findLastVisibleItemPositions(null).maxOrNull() ?: return@post
+            if (pos >= adapter.itemCount - 1 - AUTO_LOAD_THRESHOLD) {
+                Log.i(TAG, "触底自动加载：lastVisible=$pos / itemCount=${adapter.itemCount}，加载第 $loadedPages 页")
+                loadNextPage()
+            }
+        }
+    }
+
     private fun bindControls() {
         findViewById<Button>(R.id.btn_next_page).setOnClickListener { loadNextPage() }
+
+        swAutoLoad.setOnCheckedChangeListener { _, checked ->
+            Log.i(TAG, if (checked) "自动加载下一页：开" else "自动加载下一页：关（改用底部按钮手动翻页）")
+        }
 
         findViewById<Button>(R.id.btn_open_inspector).setOnClickListener {
             startActivity(Intent(this, DecodeInspectorActivity::class.java))
@@ -274,5 +348,11 @@ class ImageLabActivity : AppCompatActivity() {
 
         /** 水位条的视觉满量程。超过它按满格画，但数字仍是真实值。 */
         private const val GRAPHICS_BAR_MAX_MB = 256f
+
+        /**
+         * 自动翻页的预加载阈值：还剩这么多个 item 可见时就提前加载下一页。
+         * 取 4 是为了"滑到底之前刚好接上"，太大容易在慢网下连续翻页。
+         */
+        private const val AUTO_LOAD_THRESHOLD = 4
     }
 }

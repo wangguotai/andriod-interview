@@ -76,6 +76,14 @@
             android:text="对照组：.override(SIZE_ORIGINAL) 强解析原尺寸（危险）"
             android:textSize="12sp" />
 
+        <Switch
+            android:id="@+id/sw_auto_load"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="滚动到底自动加载下一页（关掉后只能用底部按钮手动翻页）"
+            android:textSize="12sp" />
+
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

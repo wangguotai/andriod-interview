@@ -170,12 +170,19 @@ def main():
         utid = r[0][0]
         print(f"\n[2] app 主线程：utid={utid} tid={r[0][1]} name={r[0][2]} (进程名 + is_main_thread)")
     else:
-        r = rows(tp, "select distinct tt.utid from slice s join thread_track tt on s.track_id = tt.id "
-                     "where s.name like 'draw-VRI[%' limit 1")
+        # 兜底 1：用 app 自己的线程名（Linux 线程名取进程名后 15 字符，故匹配尾部片段）
+        # 例如包名 com.example.myapplication → 主线程名 "e.myapplication"
+        tail_name = args.pkg.split(".")[-1]
+        r = rows(tp, f"select utid, tid, name from thread where is_main_thread = 1 "
+                     f"and name like '%{tail_name}%' limit 1")
+        if not r:
+            # 兜底 2：靠 draw-VRI[ 这一主线程才有的 slice 反查
+            r = rows(tp, "select distinct tt.utid from slice s join thread_track tt on s.track_id = tt.id "
+                         "where s.name like 'draw-VRI[%' limit 1")
         if r:
             utid = r[0][0]
-            print(f"\n[2] app 主线程：utid={utid}（由 draw-VRI[ 反查；"
-                  f"process.name 为空 → 抓取配置缺 linux.process_stats）")
+            print(f"\n[2] app 主线程：utid={utid}（由线程名/draw-VRI 反查；"
+                  f"process.name 为空或错记 → 抓取时 app 启动晚于 process_stats 首次扫描）")
         else:
             print("\n[2] ⚠ 无法定位 app 主线程：trace 里既没有进程名也没有 draw-VRI。")
             print("    多设备时请用 record-scroll.sh -s <serial> 指定设备。")

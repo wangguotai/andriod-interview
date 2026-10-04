@@ -78,11 +78,11 @@ mkdir -p "$(dirname "$OUT")"
 # ── 生成设备端配置（把 __APP__ 换成真实包名）──
 TMP_CFG="$(mktemp -t perfetto-cfg.XXXXXX)"
 trap 'rm -f "$TMP_CFG"' EXIT
-sed "s/__APP__/$PKG/" "$CFG" > "$TMP_CFG"
-# 时长以参数为准（覆盖配置里的 duration_ms）
-if [ "$DURATION" != "10" ]; then
-  printf '\n# override\nduration_ms: %s\n' "$DURATION" >> "$TMP_CFG"
-fi
+# 先删掉模板里的 duration_ms，再由参数统一追加 —— 否则会出现重复字段，
+# protobuf 会直接拒绝（"Saw non-repeating field 'duration_ms' more than once"）。
+# 注意单位：配置字段是 **毫秒**，命令行参数 -d 是 **秒**，必须 ×1000。
+sed "s/__APP__/$PKG/" "$CFG" | grep -v '^[[:space:]]*duration_ms' > "$TMP_CFG"
+printf '\nduration_ms: %s\n' "$(( DURATION * 1000 ))" >> "$TMP_CFG"
 
 # perfetto 只保证对 /data/misc/perfetto-configs 与 /data/misc/perfetto-traces 有读/写权限
 "${ADB[@]}" shell 'mkdir -p /data/misc/perfetto-configs /data/misc/perfetto-traces'
@@ -92,15 +92,20 @@ TRACE_ON_DEV="/data/misc/perfetto-traces/scroll-trace.perfetto"
 
 # ── 抓取 ──
 echo "▶ 开始抓取 ${DURATION}s  [设备=${SERIAL:-默认} 包=$PKG]"
+# atrace 的 app 标签（atrace_apps）是**进程启动时**读取的：若 app 先启动、再起
+# perfetto，旧版本（实测 Android 12）不会追溯开启，app 的 view/gfx 埋点全丢。
+# 所以固定顺序是：先停掉 app → 起 perfetto → 再启动 app。
+"${ADB[@]}" shell "am force-stop $PKG" >/dev/null 2>&1 || true
+
+"${ADB[@]}" shell "perfetto -c /data/misc/perfetto-configs/scroll-trace.cfg --txt -o $TRACE_ON_DEV" >/dev/null 2>&1 &
+PERFETTO_PID=$!
+
+sleep 2   # 等 traced 应用完 atrace 的 app 标签，再拉起来
 if [ -n "$ACTIVITY" ]; then
   "${ADB[@]}" shell "am start -n $PKG/$ACTIVITY" >/dev/null 2>&1 || true
   sleep 3   # 等首帧稳定，避免把冷启动算进滚动数据
 fi
 
-"${ADB[@]}" shell "perfetto -c /data/misc/perfetto-configs/scroll-trace.cfg --txt -o $TRACE_ON_DEV" >/dev/null 2>&1 &
-PERFETTO_PID=$!
-
-sleep 1
 if [ "$AUTO_SWIPE" -eq 1 ]; then
   # 自动上滑若干次，覆盖约 2 屏内容；间隔略大于滑动时长，模拟连续滚动
   SWIPES=$(( DURATION > 2 ? DURATION - 2 : 1 ))

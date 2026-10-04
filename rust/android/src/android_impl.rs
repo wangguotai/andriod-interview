@@ -17,7 +17,7 @@ use crate::{guard, ABI_VERSION, ERR_BAD_ARGUMENT, ERR_PANIC, LOG_TAG};
 /// `Bitmap.copyPixelsToBuffer` 的入参类型约束）。返回的指针在调用期间有效，
 /// 我们只读、不持有。
 unsafe fn direct_bytes<'a>(env: &JNIEnv, buf: &JByteBuffer) -> Option<&'a [u8]> {
-    let addr = unsafe { env.get_direct_buffer_address(buf) }.ok()?;
+    let addr = env.get_direct_buffer_address(buf).ok()?;
     let cap = env.get_direct_buffer_capacity(buf).ok()?;
     if addr.is_null() || cap == 0 {
         return None;
@@ -64,7 +64,7 @@ pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative
 /// `versionString(): String` —— 人类可读的版本信息，便于在设备上确认「加载的确实是这一版」。
 #[no_mangle]
 pub extern "system" fn Java_com_interview_image_nativebridge_ImagePipelineNative_versionString(
-    mut env: JNIEnv,
+    env: JNIEnv,
     _class: JClass,
 ) -> jstring {
     let text = format!(

@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
@@ -58,9 +60,42 @@ android {
     }
 
     externalNativeBuild {
+        // 顶层 cmake 块只负责 path/version（AGP 8.3 的顶层类型没有 arguments）。
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
             version = "3.22.1"
+        }
+    }
+
+    defaultConfig {
+        externalNativeBuild {
+            // 把 Rust 工具链位置传给 CMake。
+            //
+            // 为什么必须显式传：Gradle 调起的 CMake 是独立进程，不会继承我们 shell 里
+            // 导出的 RUSTUP_HOME/CARGO_HOME。实测不传的后果是：cargo 找不到，
+            // CMake 侧只打一条 warning 就跳过 Rust —— 构建「成功」、APK 里却没有 .so，
+            // 正是那种最容易被当成假绿的坑。
+            //
+            // 位置从 local.properties 读（不入库、机器相关），其次取环境变量。
+            // 本机 Rust 在 /Volumes/ext/Rust/{rustup,cargo}。
+            // 注意必须用 arguments(...) 方法而不是 arguments.add(...)：后者在
+            // Kotlin DSL 的 delegate 上解析不到。
+            cmake {
+                val localProps = Properties()
+                rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
+                    f.inputStream().use { localProps.load(it) }
+                }
+                val rustupHome: String? =
+                    localProps.getProperty("rustup.home") ?: System.getenv("RUSTUP_HOME")
+                val cargoHome: String? =
+                    localProps.getProperty("cargo.home") ?: System.getenv("CARGO_HOME")
+                if (!rustupHome.isNullOrBlank()) {
+                    arguments("-DRUSTUP_HOME_VALUE=$rustupHome")
+                }
+                if (!cargoHome.isNullOrBlank()) {
+                    arguments("-DCARGO_HOME_VALUE=$cargoHome")
+                }
+            }
         }
     }
 

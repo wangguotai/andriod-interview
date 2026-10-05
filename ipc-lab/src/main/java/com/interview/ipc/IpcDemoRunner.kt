@@ -46,8 +46,6 @@ import java.util.concurrent.TimeUnit
  *   严禁在这里碰 UI；所有结果通过返回值（[DemoResult]）交给上层。
  * - runner 必须**有界**：涉及等待的地方一律带超时，绝不允许把演示线程挂死。
  * - 证据日志的第一原则：**带上 pid/tid**。没有 pid 的「跨进程」结论不成立。
- *
- * 本文件随里程碑逐步生长：M6 追加 Binder 家族四件套（AIDL / Messenger / Provider / Broadcast）。
  */
 object IpcDemoRunner {
 

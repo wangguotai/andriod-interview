@@ -77,3 +77,17 @@ pub fn ensure_init() {
 
 #[cfg(not(ipc_linux))]
 pub fn ensure_init() {}
+
+#[cfg(all(test, ipc_linux))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_init_is_idempotent() {
+        ensure_init();
+        ensure_init();
+        // 通过 dispatch 走一遍，确认入口确实调用了初始化
+        let (_available, _ok, log) = demo::run("pipe", "");
+        assert!(log.contains("EOF"));
+    }
+}

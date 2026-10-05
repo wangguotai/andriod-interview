@@ -22,8 +22,6 @@ package com.interview.ipc
  *   - 匿名 pipe、命名 FIFO
  *   - memfd 共享内存 + SCM_RIGHTS fd 传递 + fork
  *   - POSIX 信号、flock 文件锁
- *
- * 本文件随里程碑逐步生长：M6 追加 Binder 家族四件套（AIDL / Messenger / Provider / Broadcast）。
  */
 object IpcLabCatalog {
 

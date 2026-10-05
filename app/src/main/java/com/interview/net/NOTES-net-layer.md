@@ -16,7 +16,8 @@
 | `AdaptiveRetryInterceptor.kt` | 策略 | 自适应超时 + 幂等重试 + 指数退避抖动 |
 | `NetConfig.kt` | 配置 | 所有可调参数（API 档 / 下载档 / 实验档） |
 | `NetClient.kt` | 收口 | 唯一的 OkHttpClient 工厂与共享实例 |
-| `NetLabActivity.kt` | 实验 | 真机证据链 |
+| `NetLabActivity.kt` | 实验 | 真机证据链（文本：逐条记录 / 路由判定 / pin / 取消回退） |
+| `NetDashboardActivity.kt` + `dashboard/` | 实验 | 图形仪表盘：阶段堆叠 / 长尾分位 / 切网事件 / 弱网模拟器 |
 
 ## 与优化清单的对应（已落地 / 未落地）
 

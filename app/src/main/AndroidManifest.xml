@@ -148,6 +148,14 @@
             android:exported="true"
             android:label="网络优化 Lab"
             android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- 网络度量仪表盘：把感知/度量图形化（阶段堆叠/分位时序/切网事件/弱网模拟器）。
+             与 NetLabActivity 互补：那个看证据细节，这个看整体形状。 -->
+        <activity
+            android:name="com.interview.net.NetDashboardActivity"
+            android:exported="true"
+            android:label="网络度量仪表盘"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
     </application>
 
 </manifest>

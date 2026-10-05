@@ -47,6 +47,12 @@ object HomeCatalog {
             tag = "net",
         ),
         HomeEntry(
+            title = "网络度量仪表盘",
+            subtitle = "图形化：阶段堆叠 / 长尾分位 / 切网事件 / 弱网模拟器",
+            activityClass = com.interview.net.NetDashboardActivity::class.java,
+            tag = "net",
+        ),
+        HomeEntry(
             title = "线程治理 Demo",
             subtitle = "四层防线分步演示，证明「谁在跑」",
             activityClass = com.interview.thread.ThreadGovernanceActivity::class.java,

@@ -69,6 +69,14 @@ object NetMetrics {
         val stage: Stage,
         /** 失败原因，仅在 ok=false 时有值 */
         val errorMessage: String?,
+        /**
+         * 是否为**模拟注入**的样本（默认 false = 真实请求）。
+         *
+         * 存在的唯一理由：弱网模拟器造的数据必须能与真实流量区分开，
+         * 否则仪表盘会把「人造的漂亮曲线」当成真实链路呈现 —— 那是欺骗。
+         * UI 据此用虚线/浅色区分，统计上也便于「只看真实样本」。
+         */
+        val simulated: Boolean = false,
     )
 
     /** 分位数摘要（快照，供 UI/上报读取）。 */
@@ -92,6 +100,23 @@ object NetMetrics {
     private val records = ArrayDeque<Record>(WINDOW)
     private val totalRecorded = AtomicLong(0)
 
+    /**
+     * 记录变更订阅者（仪表盘用）。
+     *
+     * ⚠️ 回调发生在**写入线程**（真实路径是 OkHttp 的回调线程，模拟路径是 UI 线程）。
+     * 订阅者必须自己切回主线程，本类不替它做 —— 度量层不该依赖 Android Looper。
+     * 用 CopyOnWrite 是因为「读多写极少」：注册通常一次，通知在每次请求后。
+     */
+    private val listeners = java.util.concurrent.CopyOnWriteArrayList<() -> Unit>()
+
+    fun addListener(listener: () -> Unit) {
+        listeners.add(listener)
+    }
+
+    fun removeListener(listener: () -> Unit) {
+        listeners.remove(listener)
+    }
+
     /** 记录一次请求。**由 [NetEventListener] 在 callEnd 时调用**，业务代码不要手动调。 */
     fun record(record: Record) {
         synchronized(records) {
@@ -101,12 +126,26 @@ object NetMetrics {
         totalRecorded.incrementAndGet()
 
         // 单向回喂感知层：真实 RTT/成败比系统类型更可信。
-        NetworkQuality.recordRequest(record.stage.totalMillis, record.ok)
+        // ⚠️ 模拟样本**不**回喂 —— 它不该污染真实的网络质量判定
+        // （否则「点了几次模拟弱网」会让策略层以为真的弱网了）。
+        if (!record.simulated) {
+            NetworkQuality.recordRequest(record.stage.totalMillis, record.ok)
+        }
+
+        listeners.forEach { runCatching { it() } }
     }
 
     /** 生成分位数摘要。纯读，可在主线程调用（整窗 ≤200 条）。 */
-    fun summary(): Summary {
-        val snapshot: List<Record> = synchronized(records) { records.toList() }
+    fun summary(): Summary = synchronized(records) { summarize(records.toList()) }
+
+    /**
+     * 对**给定的一组记录**生成摘要（纯函数）。
+     *
+     * 为什么要把 [summary] 拆出这一层：仪表盘的「只看真实样本」开关必须让
+     * 分位线也同步只算真实样本 —— 否则会出现「曲线是真实的、P99 却含模拟数据」
+     * 这种最难发现的口径不一致。口径只应有一处实现，这里就是那一处。
+     */
+    fun summarize(snapshot: List<Record>): Summary {
         if (snapshot.isEmpty()) {
             return Summary(0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1.0, -1.0)
         }
@@ -137,6 +176,7 @@ object NetMetrics {
     fun reset() {
         synchronized(records) { records.clear() }
         totalRecorded.set(0)
+        listeners.forEach { runCatching { it() } }
     }
 
     /**

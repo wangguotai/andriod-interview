@@ -154,6 +154,29 @@ InterviewDns(servers = listOf(InetSocketAddress("你的httpdns-host", 53)))
 2. `NetMetrics.Record`：加字段；
 3. `NetMetrics.summary()`：加聚合；
 4. [NetLabActivity](NetLabActivity.kt)：在「逐条记录」里展示。
+5. 若要上图：改 [dashboard/DashboardModels.kt](dashboard/DashboardModels.kt) 的变换，
+   并在 [NetDashboardActivity](NetDashboardActivity.kt) 里接给对应自定义 View。
+
+### 4.2b 网络度量仪表盘（可视化）
+
+`NetLabActivity` 是**文本证据链**（回答「有没有生效」），
+`NetDashboardActivity` 是**图形仪表盘**（回答「现在长什么样、慢在哪、尾巴多高」）。
+从首页「实验台 → 网络度量仪表盘」进入。五个区块：
+
+| 区块 | 看什么 | 数据源 |
+|---|---|---|
+| ① 阶段耗时堆叠 | 一次请求慢在 DNS / 建连 / TLS / 首包 / 传输 哪一段 | `NetMetrics.Record.stage` |
+| ② 时序 + P50/P90/P99 | 长尾何时抬头；分位线随窗口变化 | `NetMetrics.summarize()` |
+| ③ 成功率 / 复用 / 缓存 | 复用率一掉，DNS/TCP/TLS 成本就回来了 | `DashboardModels.rates()` |
+| ④ 网络状况事件 | 切网 / 档位变化的瞬间，和②的尖峰对上 | `NetworkQuality.addListener` |
+| ⑤ 弱网模拟器 | 手动注入确定性样本，看度量与降级怎么反应 | `SimulatedNetwork` |
+
+**两条数据线的纪律（重要）**：真实样本来自 OkHttp 网络栈；模拟样本由
+[SimulatedNetwork](dashboard/SimulatedNetwork.kt) 生成，落库时 **`simulated=true`**，
+图上以虚线/斜纹区分，且**不回喂** `NetworkQuality`（不会污染真实档位判定）。
+勾选「只看真实样本」会把模拟样本从曲线**和分位线**上一起剔除（同一批数据同口径）。
+
+⚠️ 模拟器**不产生真实流量、不改系统网络**，只是让演示可复现 —— 别把它当链路测量。
 
 ### 4.3 调整策略参数
 

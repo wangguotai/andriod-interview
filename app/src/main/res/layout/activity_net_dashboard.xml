@@ -1,0 +1,190 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="网络度量仪表盘"
+            android:textSize="17sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="把「感知 / 度量」画出来：阶段耗时、长尾分位、切网事件、复用与成功率"
+            android:textSize="11sp" />
+
+        <!-- 诚实横幅：真实 vs 模拟的分离，永远是页面第一等公民 -->
+        <TextView
+            android:id="@+id/tv_honesty"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#FFF3BF"
+            android:padding="6dp"
+            android:textSize="10sp"
+            android:text="加载中…" />
+
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:background="#F1F3F5"
+            android:fontFamily="monospace"
+            android:padding="8dp"
+            android:textSize="11sp"
+            android:text="—" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_real_burst"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="2"
+                android:text="真实请求 ×10（走 OkHttp）" />
+
+            <Button
+                android:id="@+id/btn_clear"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="清空" />
+        </LinearLayout>
+
+        <CheckBox
+            android:id="@+id/cb_real_only"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="图表只显示真实样本（隐藏模拟注入）"
+            android:textSize="11sp" />
+
+        <!-- ① 阶段耗时堆叠 -->
+        <TextView
+            style="@style/DashSection"
+            android:text="① 阶段耗时堆叠 —— 慢在哪一段，一眼可见" />
+
+        <com.interview.net.dashboard.StageStackedBarView
+            android:id="@+id/v_stage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <!-- ② 时序 + 分位 -->
+        <TextView
+            style="@style/DashSection"
+            android:text="② 总耗时时序 + P50/P90/P99 —— 长尾在哪里抬头" />
+
+        <com.interview.net.dashboard.LatencySeriesView
+            android:id="@+id/v_series"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <!-- ③ 比率 -->
+        <TextView
+            style="@style/DashSection"
+            android:text="③ 成功率 / 连接复用 / 缓存命中" />
+
+        <com.interview.net.dashboard.RatioBarView
+            android:id="@+id/v_ratios"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <!-- ④ 事件时间线 -->
+        <TextView
+            style="@style/DashSection"
+            android:text="④ 网络状况事件 —— 切网/档位变化的瞬间" />
+
+        <com.interview.net.dashboard.EventTimelineView
+            android:id="@+id/v_timeline"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <!-- ⑤ 弱网模拟器 -->
+        <TextView
+            style="@style/DashSection"
+            android:text="⑤ 弱网模拟器 —— 注入**确定性**样本（不产生真实流量，图表上带斜纹/虚线）" />
+
+        <RadioGroup
+            android:id="@+id/rg_preset"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <RadioButton
+                android:id="@+id/rb_good"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="良好"
+                android:textSize="11sp" />
+
+            <RadioButton
+                android:id="@+id/rb_slow"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="慢速"
+                android:textSize="11sp" />
+
+            <RadioButton
+                android:id="@+id/rb_weak"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="弱网"
+                android:textSize="11sp" />
+
+            <RadioButton
+                android:id="@+id/rb_lossy"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="高丢包"
+                android:textSize="11sp" />
+        </RadioGroup>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btn_inject"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="注入 30 条" />
+
+            <Button
+                android:id="@+id/btn_inject_swap"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="模拟一次切网" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tv_sim_note"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textSize="10sp"
+            android:text="模拟用固定随机种子，同一档位结果可复现；模拟样本不回喂 NetworkQuality（不会污染真实档位判定）。" />
+
+    </LinearLayout>
+</ScrollView>

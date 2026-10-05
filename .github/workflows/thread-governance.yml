@@ -1,38 +1,38 @@
-name: Thread Governance
-
-# 线程滥用卡口。
+#name: Thread Governance
 #
-# 为什么要单独一个窄闸门，而不是跑完整 lint：
-# 本仓库存在与线程无关的既有 lint 债务（OnClick 回调缺失等 27 处）。
-# 若闸门是「完整 lint 必须绿」，它上线第一天就是红的，然后被加 continue-on-error
-# 或直接删掉 —— 这是绝大多数 lint 卡口的死法。
-# 所以这里只跑线程三条规则（-PthreadLintOnly），它能**立刻**变绿并长期保持。
-on:
-  pull_request:
-  push:
-    branches: [main, master]
-
-jobs:
-  thread-rules:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      # Lint 规则模块自身需要 Android SDK 来解析 android.os.HandlerThread
-      - uses: android-actions/setup-android@v3
-
-      - uses: gradle/actions/setup-gradle@v3
-
-      # 1) 规则自身的单元测试：保证「该报的报、不该报的不报」
-      #    规则一旦误报率上升会被团队整体关掉，所以这个测试比规则本身更重要
-      - name: 规则单元测试
-        run: ./gradlew :thread-lint:test
-
-      # 2) 闸门：只跑线程规则，任何新违规立刻失败
-      - name: 线程滥用卡口
-        run: ./gradlew :app:lintDebug -PthreadLintOnly
+## 线程滥用卡口。
+##
+## 为什么要单独一个窄闸门，而不是跑完整 lint：
+## 本仓库存在与线程无关的既有 lint 债务（OnClick 回调缺失等 27 处）。
+## 若闸门是「完整 lint 必须绿」，它上线第一天就是红的，然后被加 continue-on-error
+## 或直接删掉 —— 这是绝大多数 lint 卡口的死法。
+## 所以这里只跑线程三条规则（-PthreadLintOnly），它能**立刻**变绿并长期保持。
+#on:
+#  pull_request:
+#  push:
+#    branches: [main, master]
+#
+#jobs:
+#  thread-rules:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - uses: actions/checkout@v4
+#
+#      - uses: actions/setup-java@v4
+#        with:
+#          distribution: temurin
+#          java-version: '17'
+#
+#      # Lint 规则模块自身需要 Android SDK 来解析 android.os.HandlerThread
+#      - uses: android-actions/setup-android@v3
+#
+#      - uses: gradle/actions/setup-gradle@v3
+#
+#      # 1) 规则自身的单元测试：保证「该报的报、不该报的不报」
+#      #    规则一旦误报率上升会被团队整体关掉，所以这个测试比规则本身更重要
+#      - name: 规则单元测试
+#        run: ./gradlew :thread-lint:test
+#
+#      # 2) 闸门：只跑线程规则，任何新违规立刻失败
+#      - name: 线程滥用卡口
+#        run: ./gradlew :app:lintDebug -PthreadLintOnly

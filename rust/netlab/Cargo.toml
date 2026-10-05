@@ -1,0 +1,31 @@
+[package]
+name = "netlab"
+version = "0.1.0"
+edition = "2021"
+description = "Rust 传输实验内核：请求校验 / 取消状态机 / 阶段计时 / 线格式编解码。零 Android、零 JNI。"
+license = "MIT"
+
+# ─── 设计纪律（与 rust/imagepipeline 同源）───
+#
+# 本 crate 是「传输栈」里**能脱离网络与设备验证**的那部分：
+#   · 请求合法性校验（方法/URL 策略）
+#   · 取消标志的状态机（并发路径最容易写错的地方）
+#   · 阶段耗时累加（与 Kotlin NetMetrics.Stage 对齐）
+#   · JNI 回传的线格式编解码（对拍用，错了会静默错位）
+#
+# 真正的 QUIC 传输（quinn/rustls）挂在 `quic` feature 后面，**默认关闭**。
+# 理由有二：
+#   1. 默认构建不拉 async runtime —— 保证 `cargo test` 与交叉编译在无网络环境下也能过；
+#   2. 线程治理：quinn 的 runtime 一旦引入，必须先想清楚它如何纳入
+#      ThreadPools 的命名/配额协议（见 rust/README.md），不能顺手带进来。
+#
+# ⚠️ 这个 crate **不得**依赖 jni / android。一旦依赖，本机测试就没法秒级跑，
+#    反馈环从「秒级」退化到「装机级」—— 那正是这套拆分要避免的事。
+
+[dependencies]
+# 默认无依赖。传输实现留给 quic feature（见下）。
+
+[features]
+default = []
+# 打开后才拉 QUIC 传输栈。当前为空占位：实现见后续里程碑（避免默认构建引入 tokio）。
+quic = []

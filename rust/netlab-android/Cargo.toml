@@ -1,0 +1,18 @@
+[package]
+name = "netlab_android"
+version = "0.1.0"
+edition = "2021"
+description = "netlab 的 JNI 绑定层：只做类型转换与句柄管理，不含传输逻辑"
+license = "MIT"
+
+[lib]
+# cdylib：产出 libnetlab_android.so，由 System.loadLibrary("netlab_android") 加载
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+netlab = { path = "../netlab" }
+
+# jni crate 只在 Android 目标下拉入；宿主平台 cargo test 不需要它。
+# 依赖越少，交叉编译越不容易在 NDK 上翻车。
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }

@@ -4,8 +4,8 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import com.interview.net.NetClient
 import com.interview.thread.ThreadPools
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.io.IOException
@@ -240,29 +240,24 @@ class ImageDownloader(context: Context) {
         private const val CACHE_DIR_NAME = "ii-images"
         private const val RETRY_DELAY_MS = 400L
 
-        private const val CONNECT_TIMEOUT_S = 10L
-        private const val READ_TIMEOUT_S = 20L
-        private const val WRITE_TIMEOUT_S = 20L
-        private const val CALL_TIMEOUT_S = 30L
-
         /**
-         * 全局单例 OkHttpClient。
-         * 连接池 / 线程池 / Dispatcher 都是重量级且可复用的，每个 Activity 建一个
-         * 会导致连接无法复用、线程数随页面数膨胀。
+         * 全局共享的下载客户端 —— 由 [NetClient] 统一装配。
          *
-         * 超时必须设置：picsum 返回的是数 MB 的原图，弱网下没有读超时会让任务
-         * 长期占住 net 泳道线程，进而把配额耗光、拖垮同模块其他请求。
+         * ─── 本轮重构要点（从「自建 client」改为「取用收口 client」）───
+         *
+         * 这里原本在 companion 里自建 OkHttpClient。改成 [NetClient.downloads] 后，
+         * 本模块自动获得三样东西，且**不必改一行下载逻辑**：
+         *   1. 全 App 共享的 DNS 缓存与坏 IP 熔断（原来自建的 client 没有 DNS 优化）；
+         *   2. 分阶段耗时度量（DNS/建连/TLS/首包），通过 [com.interview.net.NetEventListener]；
+         *   3. 与 API 请求一致的连接池治理参数。
+         *
+         * 为什么用 **downloads 档**而不是 shared：picsum 返回的是数 MB 原图，
+         * 属**带宽受限**而非 RTT 受限，需要长超时且不该重试（重下比传完更浪费）。
+         * 这是 NetConfig 分档的直接应用，不是随意选一个 client。
+         *
+         * ⚠️ 仍然坚持：这里**不能**在类里 new OkHttpClient —— 见类头「设计红线」。
+         * client 是重量级资源（连接池 + Dispatcher），一旦多份，连接复用率会碎掉。
          */
-        private val client: OkHttpClient by lazy {
-            OkHttpClient.Builder()
-                .connectTimeout(CONNECT_TIMEOUT_S, TimeUnit.SECONDS)
-                .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
-                .writeTimeout(WRITE_TIMEOUT_S, TimeUnit.SECONDS)
-                .callTimeout(CALL_TIMEOUT_S, TimeUnit.SECONDS)
-                // 原图可能较大，允许对响应体做透明 gzip（OkHttp 默认已开，
-                // 这里显式写出，避免日后被人误关）。
-                .retryOnConnectionFailure(true)
-                .build()
-        }
+        private val client by lazy { NetClient.downloads }
     }
 }

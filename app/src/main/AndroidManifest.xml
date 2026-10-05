@@ -4,6 +4,8 @@
 
     <!-- 图片加载 Lab：picsum 网络图源 + okhttp 下载原图 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 网络质量感知：读取当前网络类型与计费属性（ConnectivityManager） -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
@@ -122,6 +124,15 @@
             android:name="com.interview.image.DecodeComparisonActivity"
             android:exported="false"
             android:label="三态对照实验"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- ═══════════════════════════════════════════
+             网络层优化 Lab —— OkHttp 感知/度量/DNS/重试
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.net.NetLabActivity"
+            android:exported="true"
+            android:label="网络优化 Lab"
             android:theme="@style/Theme.MyApplication.AppCompat" />
     </application>
 

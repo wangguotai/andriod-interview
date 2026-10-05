@@ -3,6 +3,7 @@ package com.example.myapplication.application
 import android.app.Application
 import android.content.Context
 import com.example.myapplication.hotfix.HotFix
+import com.interview.net.NetClient
 //import org.koin.core.context.startKoin
 import java.io.BufferedReader
 import java.io.File
@@ -27,6 +28,12 @@ class MyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 //        startKoin {  }
+
+        // 网络质量感知必须在这里启动，而不是懒加载：
+        // 网络切换回调要在**第一次请求之前**就开始收集，否则冷启动后首个请求
+        // 读到的永远是初始值（NONE），自适应超时等策略会以错误的前提做决策。
+        // 本调用只注册回调 + 读一次当前状态，不发起任何网络 IO、不阻塞启动。
+        NetClient.init(this)
     }
 
 }

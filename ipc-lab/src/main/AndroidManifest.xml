@@ -6,6 +6,12 @@
          即便只连本机，Android 也要求声明 INTERNET 才能建 TCP socket。 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 自定义权限：给「exported 组件的访问控制」留出提法。
+         这里声明为 normal，仅作演示；真业务应把 exported 组件用 permission 保护。 -->
+    <permission
+        android:name="com.interview.ipclab.permission.IPC_DEMO"
+        android:protectionLevel="normal" />
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_ipc_lab"
@@ -24,6 +30,40 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- ═══════════════════════════════════════════════════════════
+             远端进程组件：android:process=":ipc_remote" 让它们跑在**独立进程**。
+             这是整个 Lab 的前提 —— 没有第二个进程，「跨进程」就无从谈起。
+             每个组件都会把自己的 pid 写进返回结果，用来证明「确实跨了进程」。
+             ═══════════════════════════════════════════════════════════ -->
+
+        <!-- 1) AIDL 服务：双向通信 + 异步回调 -->
+        <service
+            android:name=".binder.RemoteComputeService"
+            android:enabled="true"
+            android:exported="true"
+            android:process=":ipc_remote" />
+
+        <!-- 2) Messenger 服务：基于 Message 的轻量双向通信 -->
+        <service
+            android:name=".messenger.RemoteMessengerService"
+            android:enabled="true"
+            android:exported="true"
+            android:process=":ipc_remote" />
+
+        <!-- 3) ContentProvider：进程间共享结构化数据（含 ParcelFileDescriptor 共享内存） -->
+        <provider
+            android:name=".provider.IpcDemoProvider"
+            android:authorities="com.interview.ipclab.ipcprovider"
+            android:exported="true"
+            android:process=":ipc_remote" />
+
+        <!-- 4) 广播接收器：最轻量的「一对多」通知 -->
+        <receiver
+            android:name=".broadcast.RemoteBroadcastReceiver"
+            android:enabled="true"
+            android:exported="true"
+            android:process=":ipc_remote" />
 
     </application>
 

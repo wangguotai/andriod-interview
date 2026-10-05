@@ -5,7 +5,7 @@
 #   - 一份 target/    → 宿主编译与交叉编译的中间产物集中，磁盘与增量编译都更友好
 [workspace]
 resolver = "2"
-members = ["imagepipeline", "android"]
+members = ["imagepipeline", "android", "ipclab", "netlab"]
 
 # release profile 只在 workspace 根生效（写在各成员包里会被忽略）。
 [profile.release]

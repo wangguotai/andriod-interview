@@ -1,0 +1,25 @@
+[package]
+name = "ipclab"
+version = "0.1.0"
+edition = "2021"
+description = "Android/Linux IPC 原语：pipe/FIFO、SCM_RIGHTS fd 传递、memfd 共享内存、signal、flock"
+license = "MIT"
+
+[lib]
+# cdylib → libipclab.so，供 System.loadLibrary("ipclab") 加载；
+# rlib → 供 ipc_peer 二进制与测试复用同一份实现。
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+# 独立的本机对端进程（POSIX 原生反面参照，见 ipc-lab/NOTES-ipc-lab.md 「诚实的缺口」）。
+name = "ipc_peer"
+path = "src/bin/ipc_peer.rs"
+
+[dependencies]
+# 唯一的依赖：直接调用 Linux/bionic 的 syscall 包装。刻意不引 nix/mio 之类的高层封装，
+# 因为本 Lab 的教学目标就是「看清 syscall 本身」，多一层封装就少一层证据。
+libc = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# jni 只在 Android 目标编译；交叉编译越少依赖越不容易翻车（沿用 imagepipeline 的约定）。
+jni = { version = "0.21", default-features = false }

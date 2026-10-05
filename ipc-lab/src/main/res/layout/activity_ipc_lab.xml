@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 跨进程通信 Lab：上方演示列表 + 下方证据日志面板，同屏对照。 -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F5F6F8">
+
+    <TextView
+        android:id="@+id/ipc_pid"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="6dp"
+        android:textColor="#666666"
+        android:textSize="12sp"
+        tools:text="pid=1234 native=..." />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingBottom="10dp">
+
+        <TextView
+            android:id="@+id/ipc_status"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="就绪"
+            android:textColor="#008577"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <Button
+            android:id="@+id/ipc_summary"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="汇总对比"
+            android:textColor="#008577"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/ipc_clear"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="清空日志"
+            android:textColor="#008577"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E3E5E8" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/ipc_list"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="42"
+        android:clipToPadding="false"
+        android:paddingVertical="6dp" />
+
+    <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E3E5E8" />
+
+    <!-- 证据日志：monospace + 可滚动，保证 native 原文与对齐不错乱 -->
+    <ScrollView
+        android:id="@+id/ipc_log_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="58"
+        android:background="#101418"
+        android:padding="10dp">
+
+        <TextView
+            android:id="@+id/ipc_log"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textColor="#D9E2EC"
+            android:textIsSelectable="true"
+            android:textSize="11sp" />
+    </ScrollView>
+
+</LinearLayout>

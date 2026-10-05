@@ -10,8 +10,14 @@ C++ 那条线（`thread_hook.cpp`）负责线程 hook，Rust 这条线负责图�
 rust/
 ├── imagepipeline/   # 纯计算内核：零 Android / 零 JNI
 │   └── cargo test  ← 这是日常开发的反馈回路，秒级
-└── android/         # JNI 绑定：只做类型翻译 + 错误码 + panic 拦截
+├── android/         # JNI 绑定：只做类型翻译 + 错误码 + panic 拦截
+└── ipclab/          # 跨进程通信 Lab 的 native 侧（pipe/fifo/memfd/SCM_RIGHTS/signal/flock）
 ```
+
+> `ipclab` 是 `:ipc-lab` module 自己的 native 核心，与上面「图像性能」那条线**无关**，
+> 只是共用同一个 workspace 以便统一 target/锁文件。它的构建由
+> `tools/cmake/build_rust_android.cmake` 驱动，不走 `imagepipeline` 那套。详见
+> `ipc-lab/NOTES-ipc-lab.md`。
 
 - **算法只许写在 `imagepipeline`**。一旦它 `use` 了任何 Android/JNI 类型，本机测试就没了，
   反馈环从「秒级」退化成「装机级」——那正是这个拆分要避免的事。

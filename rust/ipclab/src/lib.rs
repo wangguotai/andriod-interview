@@ -12,6 +12,7 @@
 //! - [`filelock`]：`flock` 文件锁演示。
 //! - [`pipe`]：匿名管道 `pipe2` 与命名管道 FIFO 的演示。
 //! - [`signal`]：POSIX 信号（`kill` + `SA_SIGINFO`）演示。
+//! - [`shm`]：`memfd_create` + `mmap` + `SCM_RIGHTS` fd 传递 + `fork` 共享内存演示。
 //! - [`stream`]：AF_UNIX（abstract / filesystem）字节流演示。
 //! - [`demo`]：按名字分发到具体演示，供 JNI 层调用。
 //!
@@ -36,6 +37,8 @@ pub mod pipe;
 #[cfg(ipc_linux)]
 pub mod signal;
 #[cfg(ipc_linux)]
+pub mod shm;
+#[cfg(ipc_linux)]
 pub mod stream;
 #[cfg(ipc_linux)]
 pub mod sys;
@@ -51,7 +54,8 @@ pub const LOG_TAG: &str = "IpcLabNative";
 /// 稳定 ABI 版本号。Kotlin 侧加载后比对，不匹配即显式降级，绝不用错布局静默算错。
 ///
 /// 变更记录：
-///   1 → 初版：AF_UNIX（abstract / filesystem）字节流、匿名管道 / FIFO、POSIX 信号、flock
+///   1 → 初版：AF_UNIX（abstract / filesystem）、管道 / FIFO、POSIX 信号、flock、
+///       memfd 共享内存 + SCM_RIGHTS fd 传递
 pub const ABI_VERSION: i32 = 1;
 
 #[cfg(ipc_linux)]

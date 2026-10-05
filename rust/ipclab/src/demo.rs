@@ -11,10 +11,10 @@
 //!     - 第 3 项：整段日志（含 `[tag]` 前缀），上层原样上屏。
 //! - 不在 Kotlin 侧二次拼接日志 —— 证据的可信度来自「它就是 native 打出来的原文」。
 //!
-//! 本文件随里程碑逐步生长：M4 追加 flock。
+//! 本文件随里程碑逐步生长：M5 追加 memfd 共享内存 + SCM_RIGHTS fd 传递。
 //!
-//! - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）/ `pipe` / `fifo` / `signal` / `flock`
-/// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字；`fifo`/`flock` 传可写目录下的路径
+//! - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）/ `pipe` / `fifo` / `signal` / `flock` / `shm`
+/// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字；`fifo`/`flock` 传可写目录下的路径；`shm` 传待共享文本
 #[cfg(ipc_linux)]
 pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
     // 先把 SIGPIPE 设为忽略（dlopen 进来的 cdylib 不会自动做这件事），
@@ -23,6 +23,10 @@ pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
     match kind {
         "pipe" => (true, true, crate::pipe::pipe_demo()),
         "fifo" => (true, true, crate::pipe::fifo_demo(arg)),
+        "shm" => {
+            let payload = if arg.is_empty() { "父进程写入的共享数据" } else { arg };
+            (true, true, crate::shm::shm_fork_demo(payload))
+        }
         "signal" => (true, true, crate::signal::signal_demo()),
         "flock" => (true, true, crate::filelock::flock_demo(arg)),
         "unix" => (true, true, crate::stream::unix_socket_selftest(arg)),
@@ -57,7 +61,7 @@ pub fn run(kind: &str, _arg: &str) -> (bool, bool, String) {
 /// 支持的演示类型列表（供 Kotlin 侧做能力探测 / 展示）。
 #[cfg(ipc_linux)]
 pub fn supported() -> Vec<&'static str> {
-    vec!["pipe", "fifo", "signal", "flock", "unix", "unix_serve"]
+    vec!["pipe", "fifo", "shm", "signal", "flock", "unix", "unix_serve"]
 }
 
 #[cfg(not(ipc_linux))]
@@ -80,6 +84,6 @@ mod tests {
     #[cfg(ipc_linux)]
     #[test]
     fn supported_lists_all() {
-        assert_eq!(supported().len(), 6);
+        assert_eq!(supported().len(), 7);
     }
 }

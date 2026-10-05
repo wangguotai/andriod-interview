@@ -8,7 +8,7 @@ package com.interview.ipc
  * 新增一个演示 = 在 [DEMOS] 里加一条 + 在 [IpcDemoRunner] 里注册实现。
  * 首页与汇总页都只读这里，不硬编码任何演示。
  *
- * 本文件随里程碑逐步生长：M4 追加 flock。
+ * 本文件随里程碑逐步生长：M5 追加 memfd 共享内存 + SCM_RIGHTS fd 传递。
  */
 object IpcLabCatalog {
 
@@ -64,6 +64,13 @@ object IpcLabCatalog {
             subtitle = "fork 出子进程争锁：父持锁则子 LOCK_EX|LOCK_NB 回 EWOULDBLOCK（单实例原理）",
             layer = IpcLayer.LINUX,
             model = IpcModel.LOCK,
+        ),
+        IpcDemo(
+            id = "native_shm",
+            title = "共享内存 memfd + SCM_RIGHTS (Rust)",
+            subtitle = "memfd_create + mmap + fd 传递 + fork：证明两端 mmap 的是同一块物理内存",
+            layer = IpcLayer.LINUX,
+            model = IpcModel.SHARED_MEMORY,
         ),
     )
 

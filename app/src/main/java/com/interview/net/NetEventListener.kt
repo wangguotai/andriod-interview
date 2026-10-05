@@ -87,6 +87,19 @@ class NetEventListener private constructor(
     private var lastResponse: Response? = null
     private var lastProtocol: Protocol? = null
 
+    /**
+     * 是否收到过「由 OkHttp 自身栈产出的响应头」。
+     *
+     * 这是区分「真·网络响应」与「某个应用拦截器合成的响应」的唯一可靠信号：
+     * 合成响应（如 [RustTransportInterceptor] 走 QUIC 时）不会经过
+     * ConnectInterceptor / CallServerInterceptor，因此**不会**触发
+     * `responseHeadersEnd`/`cacheHit`，但 `callEnd` 仍会照常触发。
+     *
+     * 不加这个判断就会**双记**：合成响应的那次由合成它的拦截器记账，
+     * 这里又记一条（且 code=-1、阶段全空），把分位数与成功率悄悄污染。
+     */
+    private var sawResponse = false
+
     // ─────────────────────────────────────────
     // DNS
     // ─────────────────────────────────────────
@@ -171,6 +184,7 @@ class NetEventListener private constructor(
         if (requestSentNs > 0) serverWaitMillis = millisSince(requestSentNs)
         lastResponse = response
         lastProtocol = response.protocol
+        sawResponse = true
     }
 
     override fun responseBodyEnd(call: Call, byteCount: Long) {
@@ -181,6 +195,7 @@ class NetEventListener private constructor(
         fromCache = true
         lastResponse = response
         lastProtocol = response.protocol
+        sawResponse = true
     }
 
     // ─────────────────────────────────────────
@@ -200,6 +215,12 @@ class NetEventListener private constructor(
      * 整体包在 runCatching 里：EventMonitor 抛异常不能反过来搞崩用户的请求。
      */
     private fun emit(call: Call, ok: Boolean, error: IOException?) {
+        // ── 防双记（见 [sawResponse] 注释）──
+        // 若整条 Call 没触发过 responseHeadersEnd/cacheHit，说明响应是被某个
+        // 应用拦截器**合成**的（本仓库的 RustTransportInterceptor 即如此），
+        // 那次已由合成者记账；这里必须跳过，否则指标被双记污染且不报错。
+        if (!sawResponse) return
+
         runCatching {
             val request = runCatching { call.request() }.getOrNull()
             val response = lastResponse

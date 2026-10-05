@@ -1,110 +1,125 @@
-# B · netlab 骨架说明
+# B · netlab 说明（含 M2：QUIC 传输接入）
 
 > 前置：[DESIGN-rust-transport.md](DESIGN-rust-transport.md)（A）、[CRONET-FEASIBILITY.md](CRONET-FEASIBILITY.md)（C）。
-> 本文说明 B 阶段**实际落地了什么、没落地什么**，以及如何验证。
+> 本文说明**实际落地了什么、没落地什么**，以及如何验证 —— 只有跑过的结论写在这里。
+
+---
+
+## 0. 里程碑
+
+| 里程碑 | 内容 | 状态 |
+|---|---|---|
+| M1 | 协议边界与控制面：校验 / 取消 / 计时 / 线格式 + 薄 JNI | ✅ |
+| **M2** | **真实 HTTP/3（QUIC）传输**：kernel `h3` + `fetch` JNI + Kotlin 接缝 | ✅ 本文 |
+
+ABI 由 1 → **2**（M2 改了线格式：headers 由 map 改为**有序可重复** + 新增 `spki` 字段）。
 
 ---
 
 ## 1. 落地了什么
 
-严格沿用 [rust/README.md](../../../../../../rust/README.md) 的两层拆分：
-
 ```
 rust/
-├── netlab/               ← 纯逻辑 kernel：零 Android / 零 JNI / 零依赖
-│   └── cargo test        ← 秒级反馈回路（本阶段 36 个用例）
-└── netlab-android/       ← 薄 JNI：类型翻译 + 错误码 + panic 拦截 + 句柄管理
-    └── cargo test        ← host 侧 3 个用例（guard / ABI 对齐）
+├── netlab/               ← 传输 kernel：校验/取消/计时/线格式（纯逻辑）+ h3（quinn/rustls）
+│   └── cargo test        ← 秒级反馈回路（55 个用例）
+├── netlab-android/       ← 薄 JNI：类型翻译 + 错误码 + panic 拦截 + 句柄管理
+│   └── cargo test        ← host 侧 3 个用例（guard / ABI 对齐）
+app/src/main/java/com/interview/net/
+├── RustTransportConfig.kt        ← 路由判定（纯逻辑）+ 配置（默认关）
+├── RustTransportInterceptor.kt   ← **接缝**：应用拦截器（放最后）接管传输、合成 Response
+└── nativebridge/                 ← NetLabNative / NetLabBridge（fetch + 线格式 + SPKI）
 ```
 
-### `netlab`（kernel，36 tests）
+### `netlab`（kernel，55 tests）
 
 | 模块 | 职责 | 关键测试 |
 |---|---|---|
-| `request` | 请求准入校验（方法白名单、**拒绝明文 http**、代理明确拒绝） | 明文被拒、POST/PATCH 被拒、畸形 URL、拒绝码稳定不重复 |
-| `cancel` | 取消状态机（`cancel`/`complete`/`settle` 的 CAS 语义） | **已完成后的取消必须被忽略**、并发取消恰好一个胜出、cancel 与 complete 不得同时胜出 |
-| `timing` | 阶段耗时（字段对齐 Kotlin `NetMetrics.Stage`）+ 单调计时器 | `lap` 未 start 时返回 `None` 而非 0；**QUIC 路径不得有独立 TLS 段** |
-| `wire` | 线格式编解码（跨 FFI 回传 + 对拍） | 往返一致、**header 值中的 `:` 不被截断**、body 长度不符在编/解码两侧都报错、未知字段前向兼容、编码确定性 |
+| `request` | 请求准入（方法白名单、**拒绝明文 http**、代理明确拒绝） | 明文被拒、POST/PATCH 被拒、畸形 URL、拒绝码稳定不重复 |
+| `cancel` | 取消状态机（CAS 语义） | 已完成后的取消必须被忽略、并发取消恰好一个胜出 |
+| `timing` | 阶段耗时（字段对齐 `NetMetrics.Stage`）+ 单调计时器 | `lap` 未 start 返回 `None` 而非 0；QUIC 无独立 TLS 段 |
+| `wire` | 线格式编解码 + 头部行格式 | 往返一致、**header 值中的 `:` 不截断**、**重复头全部保留**、body 长度不符两侧都报错、未知字段前向兼容、编码确定性 |
+| **`h3`** | **quinn + rustls 的阻塞式 HTTP/3 客户端** | 明文/方法在联网前被拒、取消码契约、**取消探针是条件完成而非周期完成**、pin 不匹配可与链校验失败区分、**SPKI 提取与 openssl 独立计算值一致** |
 
-### `netlab-android`（JNI 薄层，3 tests + 交叉编译验证）
-
-导出 9 个符号，对应 Kotlin [NetLabNative](../nativebridge/NetLabNative.kt)：
+### `netlab-android`（薄 JNI，11 个符号）
 
 ```
 abiVersion / versionString
 validateRequest
 cancelTokenNew / cancelTokenFree / cancelTokenCancel / cancelTokenIsCancelled
-wireDecode
-probeHandleRoundTrip
+wireDecode / probeHandleRoundTrip
+fetch            ← M2 新增：真实 HTTP/3（阻塞式）
+spkiSha256Hex    ← M2 新增：与 OkHttp CertificatePinner 对拍用
 ```
 
-- 所有对外函数走 `guard`（catch_unwind → 错误码），**panic 不跨 FFI**；句柄的创建/释放也各自包了 `catch_unwind`（析构 panic 同样不能跨边界）。
-- 句柄借用/所有权契约写在函数注释里：`cancelTokenNew` 转移所有权给 Kotlin，`free` 只能调一次。
+所有对外函数走 `guard`/`catch_unwind`，**panic 不跨 FFI**；句柄的创建/释放也各自包了 `catch_unwind`。
 
 ---
 
-## 2. **没**落地什么（诚实清单）
+## 2. 关键设计（三条，都是踩过坑才写下的）
 
-### 2.1 没有 `fetch` —— 这是有意的
+### 2.1 线程治理：current-thread runtime + `block_on`
 
-真正的 QUIC 传输（quinn/rustls）**尚未接入**。原因不是"来不及"，而是设计文档 §4.1 那个前提问题还没解：
+`h3::fetch` 用 **current-thread runtime**，runtime **不额外起 worker 线程**，
+IO 由**调用方线程**驱动。Cargo.toml 刻意**不开** `rt-multi-thread` feature，从依赖层面兜住。
 
-> quinn 需要 async runtime，而 runtime 会起自己的 event loop 线程，绕过 `thread-lint`
-> 与 `ThreadPools` 的命名/配额治理。
+⇒ 网络任务落在 `ThreadPools` 的 net 泳道线程上，命名/配额/背压继续生效。
+**因此 Kotlin 侧必须在泳道线程上调用 `fetch`**（它是阻塞式 JNI 调用）。
+代价：并发度受 net 泳道 core 数约束 —— 这是既有设计，且泳道注释已论证其合理性。
 
-在解决"runtime 线程如何纳入泳道治理"之前就塞一个 `fetch` 进去，只会得到一个名字唬人、
-实际上要么空转、要么偷偷起游离线程的实现。**所以本阶段刻意不提供该符号** ——
-宁可边界清晰，也不要一个看起来能发请求的假绿。
+### 2.2 接缝：应用拦截器（放最后），不是 `Call.Factory`
 
-### 2.2 其余缺口
+见 A §0。用 `Call.Factory` 会让 OkHttp「bypassed completely」，**静默干掉**
+`AdaptiveRetryInterceptor`；`socketFactory` 装不下 QUIC（UDP + 握手融合）。
+应用拦截器放最后，是唯一既保留既有拦截器、又能接管传输的缝。
 
-| 项 | 状态 |
-|---|---|
-| QUIC / HTTP-3 实际收发 | ❌ 未实现（见 2.1） |
-| rustls 证书固定实现 | ❌ 未实现（设计见 A §6，安全红线） |
-| Kotlin 侧 `RustTransportInterceptor` | ❌ 未实现（设计见 A §3） |
-| 流式 body / 上传 / SSE / WebSocket | ❌ 第一版范围外（A §7） |
-| 度量回灌到 `NetMetrics` | ❌ 未实现（设计见 A §5） |
+### 2.3 ⚠️ 防双记（本接缝最隐蔽的坑）
 
-一句话：**B 交付的是"协议边界与控制面"，不是"能跑 QUIC 的传输层"。**
+OkHttp 对每个 Call 都会在**最外层**触发 `EventListener.callEnd`（`RealCall` 源码实测）。
+所以应用拦截器合成 Response、**不调 `chain.proceed()`** 时，`NetEventListener`
+**仍会记一条** code=-1、阶段全空的脏记录 —— 与合成者的记录叠加 = **双记**，
+分位数/成功率/复用率被静默污染、不报错。
 
----
+处理：[`NetEventListener`](NetEventListener.kt) 只在**收到过真实响应头**
+（`responseHeadersEnd`/`cacheHit`，即 `sawResponse`）时才记账。合成响应不经过
+`ConnectInterceptor`/`CallServerInterceptor`，因此不会触发这些回调 → 自动跳过。
+有专门的集成测试钉住（见 §4）。
 
-## 3. 构建接线（CMake 的改动）
-
-[rust_build.cmake](../../../../../../app/src/main/cpp/rust_build.cmake) 从"为 imagepipeline 写死"重构为通用形式：
-
-- **工具链探测只做一次**（ABI→target 映射、cargo 可用性、`rustup target` 检查）；
-- 新增 `add_rust_android_library(<target> <crate_dir> <lib_name> [extra...])`；
-- [CMakeLists.txt](../../../../../../app/src/main/cpp/CMakeLists.txt) 现在两行注册两个库：
-
-```cmake
-add_rust_android_library(imagepipeline_android rust/android imagepipeline_android rust/imagepipeline)
-add_rust_android_library(netlab_android rust/netlab-android netlab_android rust/netlab)
-```
-
-⚠️ 重构时保留了原有的三条踩坑注释（SHARED 目标而非 custom/IMPORTED、`-D` 参数不要重复加引号、
-`RUST_REPO_ROOT` 的层级），并新增一条：**`netlab-android` 把 `netlab` 作为增量依赖传入**，
-否则改了 kernel 源码不会触发 `.so` 重编 —— 那正是最典型的"改了不生效"假绿。
+> 曾考虑用「把 `sentRequestAtMillis` 置负」当标记，最终选 `sawResponse` 更简单且语义直接。
+> 无论哪种，**关键是必须有测试**：这条路径纯逻辑单测盖不住。
 
 ---
 
-## 4. 验证方式（本阶段实际执行过的）
+## 3. **没**落地什么（诚实清单 —— 读之前先看这里）
+
+| 项 | 状态 | 说明 |
+|---|---|---|
+| 证书固定的**配置通道** | ❌ | kernel 的 pinning **已实现并经真实服务器端到端验证**（正确命中/错误拒绝/可诊断），但「把 pin 从 Java 传进 Rust」的 JNI 通道**还没接**，故当前 `fetch` 走默认链路校验 |
+| QUIC 连接复用 | ❌ | 每次调用新建 endpoint/connection，`reusedConnection` 恒为 false。复用需在 Kotlin 侧持有连接池 + 一个纳入治理的长驻 runtime |
+| 流式 body / 上传 / SSE / WebSocket | ❌ | v1 只支持「已完整读入内存」的小 body（≤64KB） |
+| Android 系统 CA / Network Security Config | ❌ | v1 用 `webpki-roots`（Mozilla 根集合），覆盖公网服务，**覆盖不到企业自签 CA** |
+| `handshake` 完整重建 | ❌ | quinn 未暴露 cipher/TLS 版本，合成 `Response` 的 `handshake` 置 null（**相对 OkHttp 是信息降级**）；补偿：回传叶证书 SPKI |
+| 硬中断取消 | ❌ | 取消是协作式：select 每 50ms 查标志，命中即丢弃 future；**不能打断底层 socket syscall** |
+| 重定向 | ❌ | 交回 OkHttp；Rust 路径不跟随 3xx |
+| HTTP 缓存 | ❌ | 交回 OkHttp |
+| 代理 | ❌ | 明确拒绝（不静默直连） |
+
+---
+
+## 4. 验证方式（本节全部实测过）
 
 ```bash
-# 1) kernel 秒级单测（不需设备、不需网络）
+# 1) kernel + JNI 秒级单测（不需设备、不需网络）
 export RUSTUP_HOME=/Volumes/ext/Rust/rustup CARGO_HOME=/Volumes/ext/Rust/cargo PATH=/Volumes/ext/Rust/cargo/bin:$PATH
 cargo test -p netlab -p netlab_android
-#   => netlab 36 passed；netlab_android 3 passed
+#   => netlab 55 passed；netlab_android 3 passed
 
-# 2) 交叉编译（arm64）
-NDK=$HOME/Library/Android/sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/darwin-x86_64/bin
-CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$NDK/aarch64-linux-android24-clang \
-CC_aarch64_linux_android=$NDK/aarch64-linux-android24-clang \
-AR_aarch64_linux_android=$NDK/llvm-ar \
-cargo build --manifest-path rust/netlab-android/Cargo.toml --target aarch64-linux-android --release
+# 2) 真实 HTTP/3 冒烟（需外网；不放进常规单测，避免污染秒级回路）
+cargo run -p netlab --example h3_fetch --release -- cloudflare-quic.com --verify-pin
 
-# 3) 走 Gradle native 构建，确认 .so 进 APK（关键：这一步才证明接线对）
+# 3) Kotlin 纯逻辑 + 集成单测（MockWebServer 跑真实 OkHttp 栈）
+./gradlew :app:testDebugUnitTest          # 全量：67 passed
+
+# 4) 交叉编译 + 进 APK
 ./gradlew :app:assembleDebug
 unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
 ```
@@ -113,25 +128,45 @@ unzip -l app/build/outputs/apk/debug/app-debug.apk | grep '\.so$'
 
 | 项 | 结果 |
 |---|---|
-| `cargo test -p netlab` | **36 passed** / 0 failed（0.02s） |
-| `cargo test -p netlab_android` | **3 passed** / 0 failed |
-| 交叉编译 | ✅ `libnetlab_android.so` 492 KB |
-| APK 内 native 库 | ✅ `libnetlab_android.so` **343 KB**（arm64-v8a） |
-| 导出符号 | ✅ 9 个 `Java_com_interview_net_nativebridge_*` |
-| APK 体积 | 13.1 → **13.5 MB**（debug；增量来自 netlab .so，非 Cronet 的 7 MB） |
-
-> 顺带一个反向证据：`libimagepipeline_android.so` 在 APK 里是 319 KB —— 说明
-> **重构后的 CMake 没有破坏既有的图像侧接线**（否则它会是 CMake 占位空库）。
+| `cargo test -p netlab -p netlab_android` | **55 + 3 passed** / 0 failed |
+| 真实 HTTP/3（host，cloudflare-quic.com） | ✅ **200**，125959 B，QUIC 建连 285~796ms |
+| SPKI 提取 vs openssl 独立计算 | ✅ 一致（`d8a2…b663`，单测钉住） |
+| pinning 端到端（真实服务器） | ✅ 正确 pin 成功 / 错误 pin 被拒且标记为 `SPKI-PIN-MISMATCH` |
+| Kotlin 单测 | ✅ `RustTransportTest` 23 + `RustTransportInterceptorIntegrationTest` 10 + 既有 17 + 图像 17 = **67 passed** |
+| 交叉编译 | ✅ `libnetlab_android.so` **2.57 MB**（stripped，arm64） |
+| APK 内 native 库 | ✅ `libnetlab_android.so` 2.57 MB；`libimagepipeline_android.so` 仍 327 KB（CMake 未破坏图像侧） |
+| APK 体积 | 13.5 → **16.85 MB**（debug；增量 ≈ netlab QUIC 栈，**对比 Cronet 单 ABI 7 MB 更省**） |
+| 导出符号 | ✅ 11 个（含 `fetch` / `spkiSha256Hex`） |
 
 ---
 
-## 5. 下一步（若继续）
+## 5. 与 Cronet 的体积对照
 
-按优先级：
+| 方案 | 单 ABI native | 说明 |
+|---|---|---|
+| Cronet bundled | ≈ **7.0 MB** | 成熟、Java↔Java 适配器现成 |
+| 本方案 netlab(quinn+rustls) | ≈ **2.57 MB** | 需自建 Rust→JNI→Kotlin 桥；v1 功能面窄 |
 
-1. **解决 runtime 线程治理**：确认 quinn 用 current-thread runtime + `block_on`、
-   由 netlab 线程驱动，并在 `rust/README.md` 登记协议 → 这是接入 `fetch` 的前置。
-2. 接入 `quinn` + `rustls`，实现窄接口 `fetch`，只支持 `request::validate` 放行的请求。
-3. 实现 rustls 证书固定（A §6），并把"两条路径证书行为一致"做成对拍用例。
-4. Kotlin 侧 `RustTransportInterceptor` + 度量回灌（A §3/§5）。
-5. 出 A/B 报告（h2 vs h3 的 P50/P90/P99），**允许结论是"无显著差异"**。
+即 **netlab 在体积上有明显优势，代价是功能覆盖面与自建成本**（见 C 文档）。
+这是"能选 Rust 而非 Cronet"在本项目的**主要量化理由**。
+
+---
+
+## 6. 下一步（若继续）
+
+1. **证书固定的 JNI 配置通道**（安全红线里唯一未接的一环）：把 pin 从
+   `NetConfig`/`CertificatePinner` 传到 `TlsConfig`，并加"两条路径证书行为一致"的对拍。
+2. **QUIC 连接复用**：一个 client 共享一个 current-thread runtime，由**单条**登记过的
+   `ThreadPools` 长驻任务驱动（须在 `rust/README.md` 显式登记治理协议）。
+3. 流式 body（跨 JNI 背压）—— 难度最高，建议最后做。
+4. A/B 报告（同接口、同网络下 OkHttp(h2) vs Rust(h3) 的 P50/P90/P99），**允许结论是"无显著差异"**。
+
+---
+
+## 7. 一句总结
+
+M2 把设计文档 A 里那条"缝在应用拦截器"的路线**跑通了真实 QUIC**：
+kernel 有 55 个秒级测试、真实服务器 200 OK 与 pinning 端到端验证；
+Kotlin 侧 67 个测试（含 10 个用真实 OkHttp 栈的集成测试）证明接缝与防双记护栏有效；
+`.so` 进 APK 且体积（2.57 MB）比 Cronet 单 ABI（≈7 MB）更省。
+**未接的安全一环**（pin 的 JNI 配置通道）与**未做的复用/流式**已在上表逐条列明，不含糊。

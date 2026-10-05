@@ -9,7 +9,8 @@
 //!   3. [`timing`]：阶段耗时累加，字段与 Kotlin `NetMetrics.Stage` 对齐
 //!   4. [`wire`]：JNI 回传的线格式编解码（对拍用；字段错位是最阴的错法）
 //!
-//! 真正的 QUIC 传输（quinn/rustls）挂在 `quic` feature 后，见 crate 文档。
+//! 真正的 QUIC 传输在 [`h3`]：基于 quinn/rustls 的阻塞式 HTTP/3 客户端
+//! （current-thread runtime + block_on，**不额外起线程**，见该模块头注释）。
 //!
 //! ─── 为什么把「校验/取消/计时」放在 Rust 而不是 Kotlin ───
 //!
@@ -19,6 +20,7 @@
 //! 逻辑留在 Rust、由窄 JNI 暴露判定结果，是让两端**只有一个真相**的做法。
 
 pub mod cancel;
+pub mod h3;
 pub mod request;
 pub mod timing;
 pub mod wire;
@@ -30,7 +32,10 @@ pub mod wire;
 ///
 /// 变更记录：
 ///   1 → M1：abiVersion / versionString / validateRequest / CancelToken / timing / wire
-pub const ABI_VERSION: i32 = 1;
+///   2 → M2：新增 h3 模块（真实 HTTP/3 fetch）+ 线格式 headers 改为有序可重复
+///           （否则 Set-Cookie 会被静默覆盖）并新增 spki 字段。
+///           **线格式变更 ⇒ 版本必须 +1**，与 netlab_android::ABI_VERSION 同步。
+pub const ABI_VERSION: i32 = 2;
 
 /// 本 crate 的版本字符串，供 Kotlin 侧 diagnostics 展示。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -44,7 +49,7 @@ mod tests {
 
     #[test]
     fn abi_and_version_are_stable() {
-        assert_eq!(ABI_VERSION, 1, "ABI 版本变更必须同步 Kotlin 侧 EXPECTED_ABI_VERSION");
+        assert_eq!(ABI_VERSION, 2, "ABI 版本变更必须同步 Kotlin 侧 EXPECTED_ABI_VERSION");
         assert!(!VERSION.is_empty());
         assert_eq!(LOG_TAG, "NetLabNative");
     }

@@ -2,6 +2,7 @@ package com.interview.net
 
 import android.content.Context
 import android.util.Log
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -75,8 +76,15 @@ object NetClient {
      *
      * 默认返回**共享单例**（[shared]）；只有实验页需要对照不同参数时才自建，
      * 且要显式传 [config] —— 自建会各带一份连接池，这本身就是实验要量的东西。
+     *
+     * @param rustTransport 非 null 时，在**最后**追加 [RustTransportInterceptor]，
+     *   让满足路由判据的请求改走 Rust HTTP/3。传 null（默认）则完全不接入 ——
+     *   [shared]/[downloads] 因此保持既有行为，接入新传输**零回归风险**。
      */
-    fun build(config: NetConfig = NetConfig.DEFAULT): OkHttpClient {
+    fun build(
+        config: NetConfig = NetConfig.DEFAULT,
+        rustTransport: RustTransportConfig? = null,
+    ): OkHttpClient {
         return OkHttpClient.Builder()
             .dns(dns)
             .connectTimeout(config.connectTimeoutMillis, TimeUnit.MILLISECONDS)
@@ -105,6 +113,11 @@ object NetClient {
             )
             // 策略：应用层重试（含自适应超时）。
             .addInterceptor(AdaptiveRetryInterceptor(config))
+            // 传输：Rust HTTP/3 —— 必须在**最后**追加，才能保留上面所有拦截器。
+            // （放前面会让重试/自适应超时看不到这些请求，静默失效。）
+            .apply {
+                rustTransport?.let { addInterceptor(RustTransportInterceptor(config = it)) }
+            }
             .build()
     }
 
@@ -138,6 +151,47 @@ object NetClient {
 
     /** 当前 DNS 实现（供实验页展示缓存/熔断状态）。 */
     fun dnsDebugState(): String = dns.debugState()
+
+    /**
+     * 构造一个**接入 Rust HTTP/3** 的实验客户端。
+     *
+     * 与 [build] 的关系：这是唯一「官方」的生产式装配入口，把 [RustTransportConfig]
+     * 传下去即可。刻意不做成默认 —— 默认关闭是本仓库对新传输通道的一贯态度
+     * （见 [RustTransportConfig] 注释）：装上代码 ≠ 开始接管流量。
+     *
+     * ⚠️ 必须在 net 泳道线程上使用该 client（Rust 传输是阻塞式 JNI 调用）。
+     */
+    fun buildWithRustTransport(
+        config: NetConfig = NetConfig.DEFAULT,
+        rustTransport: RustTransportConfig = RustTransportConfig(enabled = true, hostAllowlist = setOf("api.github.com")),
+    ): OkHttpClient = build(config, rustTransport)
+
+    /**
+     * 构建期对该 URL 的路由判定（供实验页展示「为什么走/不走 Rust」）。
+     * 纯逻辑，不发起请求，不读网络状态以外的任何东西。
+     */
+    fun explainRoute(url: String, method: String = "GET"): String {
+        val parsed = runCatching { url.toHttpUrl() }.getOrNull()
+            ?: return "URL 非法：$url"
+        val q = networkQuality()
+        val cfg = RustTransportConfig(
+            enabled = true,
+            hostAllowlist = setOf(parsed.host),
+        )
+        val decision = decideRustRoute(
+            url = parsed,
+            method = method,
+            hasProxy = false,
+            bodySize = 0,
+            level = q.level,
+            onMainThread = false,
+            config = cfg,
+        )
+        return when (decision) {
+            is RouteDecision.Route -> "✅ 走 Rust HTTP/3（level=${q.level}）"
+            is RouteDecision.Skip -> "➡ 走 OkHttp：${decision.reason}（level=${q.level}）"
+        }
+    }
 
     /**
      * 全局网络质量快照。UI 与降级策略统一从这里读，不直接碰 NetworkQuality，

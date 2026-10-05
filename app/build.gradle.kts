@@ -59,6 +59,16 @@ android {
         }
     }
 
+    testOptions {
+        unitTests {
+            // JVM 单测里 android.jar 的方法默认抛「not mocked」。设 true 后返回默认值
+            // （Log.v 返回 0、Looper 等返回 null），从而让**依赖 android.util.Log 的
+            // 生产代码**也能在宿主 JVM 上被测到 —— 否则测试就得为「能不能打日志」
+            // 而绕过真实实现，那反而是本末倒置。
+            isReturnDefaultValues = true
+        }
+    }
+
     externalNativeBuild {
         // 顶层 cmake 块只负责 path/version（AGP 8.3 的顶层类型没有 arguments）。
         cmake {
@@ -141,6 +151,14 @@ dependencies {
     implementation(libs.material)
     implementation(libs.constraintlayout)
     testImplementation(libs.junit)
+    // MockWebServer：集成测试里提供一个**真实的 OkHttp 网络栈**（本地）。
+    // 用来证明「应用拦截器合成 Response 时 EventListener 仍会触发 callEnd」这条
+    // 会发生双记的路径确实存在，以及本仓库的防双记护栏真的生效 ——
+    // 这是纯逻辑单测证明不了的（它依赖 OkHttp 的真实拦截器链与事件时序）。
+    testImplementation("com.squareup.okhttp3:mockwebserver:${libs.versions.okhttp.get()}")
+    // okhttp-tls：让 MockWebServer 跑 **HTTPS**。必需 —— 路由判定会拒绝明文 http，
+    // 用明文 mock server 根本走不到被测路径（会一路退回 OkHttp）。
+    testImplementation("com.squareup.okhttp3:okhttp-tls:${libs.versions.okhttp.get()}")
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -2,30 +2,50 @@
 name = "netlab"
 version = "0.1.0"
 edition = "2021"
-description = "Rust 传输实验内核：请求校验 / 取消状态机 / 阶段计时 / 线格式编解码。零 Android、零 JNI。"
+description = "Rust 传输实验内核：HTTP/3(QUIC) 客户端 + 请求校验 / 取消 / 计时 / 线格式。纯逻辑，JNI 无关。"
 license = "MIT"
 
 # ─── 设计纪律（与 rust/imagepipeline 同源）───
 #
-# 本 crate 是「传输栈」里**能脱离网络与设备验证**的那部分：
-#   · 请求合法性校验（方法/URL 策略）
-#   · 取消标志的状态机（并发路径最容易写错的地方）
-#   · 阶段耗时累加（与 Kotlin NetMetrics.Stage 对齐）
-#   · JNI 回传的线格式编解码（对拍用，错了会静默错位）
-#
-# 真正的 QUIC 传输（quinn/rustls）挂在 `quic` feature 后面，**默认关闭**。
-# 理由有二：
-#   1. 默认构建不拉 async runtime —— 保证 `cargo test` 与交叉编译在无网络环境下也能过；
-#   2. 线程治理：quinn 的 runtime 一旦引入，必须先想清楚它如何纳入
-#      ThreadPools 的命名/配额协议（见 rust/README.md），不能顺手带进来。
+# 本 crate 分两部分：
+#   1. **纯逻辑**（request / cancel / timing / wire）—— 零外部依赖，任何平台秒级测试；
+#   2. **QUIC 传输**（h3 模块）—— 依赖 quinn/rustls，但运行期**不额外起线程**。
 #
 # ⚠️ 这个 crate **不得**依赖 jni / android。一旦依赖，本机测试就没法秒级跑，
 #    反馈环从「秒级」退化到「装机级」—— 那正是这套拆分要避免的事。
+#
+# ─── 线程治理（本仓库的硬约束）───
+#
+# h3 模块的公开 API 只提供**阻塞式** entry（内部 current-thread runtime +
+# block_on）：runtime 不额外起线程，IO 由调用方线程驱动。
+# 因此网络任务仍落在 ThreadPools 的泳道线程上，命名/配额/背压继续生效。
+# 见 rust/README.md 「与仓库既有约束的关系」。
 
 [dependencies]
-# 默认无依赖。传输实现留给 quic feature（见下）。
+# 纯逻辑部分不需要 tokio；传输实现需要，故统一声明。
+# 只开 rt/net/time —— **不开 rt-multi-thread**：从依赖层面保证不会起 worker 线程池。
+tokio = { version = "1.35", default-features = false, features = ["rt", "net", "time", "macros"] }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+h3 = "0.0.8"
+h3-quinn = "0.0.10"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+http = "1"
+bytes = "1"
+# pinning 用：从证书 DER 提取 SPKI（复用 rustls 依赖树里已有的 webpki，不自己写 ASN.1）
+webpki = { package = "rustls-webpki", version = "0.103" }
+ring = "0.17"
+
+[dependencies.rustls]
+version = "0.23"
+default-features = false
+features = ["std", "tls12", "ring"]
+
+[dependencies.webpki-roots]
+version = "0.26"
+optional = true
 
 [features]
-default = []
-# 打开后才拉 QUIC 传输栈。当前为空占位：实现见后续里程碑（避免默认构建引入 tokio）。
-quic = []
+default = ["webpki-roots"]
+# WebPKI 根证书（Mozilla 根集合）。关掉后当前实现无法校验证书链，
+# 会在建连前明确报错（而不是静默放行）—— 见 h3.rs 的 build_client_config。
+webpki-roots = ["dep:webpki-roots"]

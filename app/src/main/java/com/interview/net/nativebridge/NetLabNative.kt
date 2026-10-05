@@ -74,6 +74,33 @@ internal object NetLabNative {
     external fun wireDecode(buf: ByteArray): String?
 
     /**
+     * 发起一次 HTTP/3 请求（**阻塞式**）。返回线格式字节，失败/参数错误返回 null。
+     *
+     * ⚠️ 这是阻塞调用，且会在**调用线程**上完成全部 IO（netlab 用 current-thread
+     * runtime + block_on，不额外起线程）。因此**必须**在 [com.interview.thread.ThreadPools]
+     * 的 net 泳道线程上调用，否则既会卡住调用线程（主线程 = ANR），又绕开泳道治理。
+     *
+     * @param headers 行格式 `Name: value\r\n`（见 Rust `wire::encode_header_lines`）
+     * @param body    已完整读入内存的请求体；无 body 传 null
+     * @param cancelHandle [cancelTokenNew] 返回的句柄；0 = 不取消
+     */
+    external fun fetch(
+        url: String,
+        method: String,
+        headers: ByteArray?,
+        body: ByteArray?,
+        timeoutMs: Long,
+        cancelHandle: Long,
+    ): ByteArray?
+
+    /**
+     * 不连网地计算证书 SPKI-SHA256（小写十六进制）。失败返回 null。
+     *
+     * 供「与 OkHttp `CertificatePinner` 对拍」用：同一张证书，两条实现必须算出同一个指纹。
+     */
+    external fun spkiSha256Hex(certDer: ByteArray): String?
+
+    /**
      * 句柄往返自证：对给定令牌走一遍「判定未取消 → 取消 → 判定已取消」。
      * 返回 `1` 表示跨 FFI 的句柄读写语义正常。对应图像侧的 `probeLayout`。
      */

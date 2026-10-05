@@ -156,9 +156,9 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_wireDeco
 ) -> jstring {
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Option<String> {
         let bytes = env.convert_byte_array(buf).ok()?;
-        let (resp, body) = wire::decode(&bytes).ok()?;
+        let (resp, _body) = wire::decode(&bytes).ok()?;
         Some(format!(
-            "status={} proto={} reused={} connect_ms={:?} first_byte_ms={:?} total_ms={} body_bytes={} headers={}",
+            "status={} proto={} reused={} connect_ms={:?} first_byte_ms={:?} total_ms={} body_bytes={} header_count={} spki={}",
             resp.status,
             resp.proto,
             resp.reused_connection,
@@ -166,8 +166,10 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_wireDeco
             resp.first_byte_ms,
             resp.total_ms,
             resp.body_bytes,
-            // body 摘要：只给长度与首字节，避免把大 body 塞进日志字符串
-            body.len(),
+            // header 条数：重复头各自计数（Vec，不再被 map 合并）。
+            // 修复：此处原先误传 body.len()，字段标签与值不符（诊断字符串会误导）。
+            resp.headers.len(),
+            resp.spki_sha256.as_deref().unwrap_or("none"),
         ))
     }));
     match result {
@@ -203,7 +205,7 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_versionS
 
 /// `probeHandleRoundTrip(long handle): int` —— 句柄往返自证（对拍用）。
 ///
-/// 给一个令牌句柄，创建→取消→判定，返回 `1` 表示「创建、取消语义、句柄读写」全部正常。
+/// 给一个令牌句柄，走一遍「判定未取消 → 取消 → 判定已取消」。
 /// 存在的意义与图像侧的 `probeLayout` 相同：**把一条跨 FFI 的假设变成可断言的证据**，
 /// 而不是只在文档里写「句柄是这么用的」。句柄用错（重复释放/悬垂）是 native 最阴的错法，
 /// 不会崩在调用点，只会在之后再崩。
@@ -236,4 +238,128 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_probeHan
 #[allow(dead_code)]
 fn _keep_arc_import() -> Arc<CancelToken> {
     Arc::new(CancelToken::new())
+}
+
+// ─────────────────────────────────────────
+// fetch —— 真正的 QUIC/HTTP-3 传输（阻塞式，跑在调用方线程上）
+// ─────────────────────────────────────────
+
+/// `fetch(String url, String method, byte[] headers, byte[] body, long timeoutMs, long cancelHandle): byte[]`
+///
+/// 阻塞式发起一次 HTTP/3 请求，返回[线格式](netlab::wire)字节；`null` 表示参数/内部错误。
+///
+/// ─── 线程治理（本符号最重要的约定）───
+/// 本函数在**调用方线程**上完成全部 IO：netlab::h3 用 current-thread runtime +
+/// block_on，不额外起 worker 线程。所以 Kotlin 侧调用时应落在 ThreadPools 的
+/// net 泳道线程上。ConcurrentHashMap 里那句「不得起游离线程」的约束由此继续成立。
+///
+/// ─── 取消 ───
+/// `cancel_handle` 是 `cancelTokenNew` 返回的句柄（可为 0 = 不取消）。
+/// 取消是**协作式**的：在阶段边界检查，无法硬中断正在进行的 socket 读
+/// （见 DESIGN §4.3，已知缺口）。因此这里额外在 fetch 返回后再查一次。
+///
+/// ─── 安全 ───
+/// 无 pin 配置。v1 用 webpki-roots 做完整链校验；**证书固定（pinning）尚未接入
+/// 本符号**（h3.rs 已实现并有端到端验证，但把 pin 从 Java 传进来的通道是下一步）。
+/// 这条缺口必须显式说明，不能让它看起来「已经安全对齐了」。
+#[no_mangle]
+pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
+    mut env: JNIEnv,
+    _class: JClass,
+    url: JString,
+    method: JString,
+    headers: JByteArray,
+    body: JByteArray,
+    timeout_ms: jlong,
+    cancel_handle: jlong,
+) -> jni::sys::jbyteArray {
+    use netlab::h3::{self, FetchRequest, TlsConfig};
+
+    // 全部包在 catch_unwind 里：panic 绝不跨 FFI。
+    let encoded = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        let url = read_string(&mut env, &url)?;
+        let method = read_string(&mut env, &method)?;
+        let header_bytes = if headers.is_null() { Vec::new() } else { env.convert_byte_array(&headers).ok()? };
+        let body_bytes = if body.is_null() { None } else { Some(env.convert_byte_array(&body).ok()?) };
+
+        // 取取消标志：句柄为 0 表示不取消。只借用，不取所有权。
+        // 用 Arc<CancelToken> 克隆出闭包捕获的句柄，保证句柄在 fetch 期间不被外部释放时悬垂。
+        let token: Option<CancelToken> = if cancel_handle == 0 {
+            None
+        } else {
+            Some(unsafe { &*(cancel_handle as *const CancelToken) }.clone())
+        };
+
+        let req = FetchRequest {
+            url,
+            method,
+            has_proxy: false,
+            timeout_ms: if timeout_ms > 0 { timeout_ms as u64 } else { 15_000 },
+            headers: wire::decode_header_lines(&header_bytes),
+            body: body_bytes,
+        };
+
+        let result = h3::fetch(req, &TlsConfig::default(), move || {
+            token.as_ref().is_some_and(|t| t.is_cancelled())
+        });
+
+        Some(match result {
+            Ok(resp) => {
+                let leaf_spki = resp
+                    .peer_certificates
+                    .first()
+                    .and_then(|der| h3::spki_sha256_hex(der));
+                let wire_resp = wire::WireResponse {
+                    status: resp.status,
+                    proto: "HTTP_3".to_string(),
+                    reused_connection: resp.reused_connection,
+                    connect_ms: Some(resp.connect_ms),
+                    first_byte_ms: Some(resp.first_byte_ms),
+                    total_ms: resp.total_ms,
+                    body_bytes: resp.body.len(),
+                    spki_sha256: leaf_spki,
+                    headers: resp.headers,
+                };
+                // 编码失败（理论上 body_bytes 已对齐）→ 回传错误码而不是抛
+                wire::encode(&wire_resp, &resp.body)
+                    .unwrap_or_else(|e| wire::encode_error(ERR_WIRE, &format!("{e:?}")))
+            }
+            Err(e) => wire::encode_error(e.code(), &e.message()),
+        })
+    }));
+
+    match encoded {
+        Ok(Some(bytes)) => match env.byte_array_from_slice(&bytes) {
+            Ok(arr) => arr.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        _ => std::ptr::null_mut(),
+    }
+}
+
+/// 线编码失败的内部错误码（不应发生；发生即为实现 bug）。
+const ERR_WIRE: i32 = -3;
+
+/// `probeSpki(String host): String` —— **不连网**的 SPKI 计算自证。
+///
+/// 给一个已被 fetch 过的证书 DER 的十六进制串，返回其 SPKI-SHA256。
+/// 与图像侧 probeLayout 同一用途：把「SPKI 提取这一段是跨语言可信的」
+/// 变成设备上可断言的证据（Kotlin 侧可用同一证书跑 OkHttp CertificatePinner 对拍）。
+#[no_mangle]
+pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_spkiSha256Hex(
+    env: JNIEnv,
+    _class: JClass,
+    cert_der: JByteArray,
+) -> jstring {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Option<String> {
+        let der = env.convert_byte_array(cert_der).ok()?;
+        netlab::h3::spki_sha256_hex(&der)
+    }));
+    match result {
+        Ok(Some(hex)) => match env.new_string(hex) {
+            Ok(s) => s.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
+        _ => std::ptr::null_mut(),
+    }
 }

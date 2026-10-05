@@ -16,22 +16,34 @@
 //!
 //! ```text
 //! OK            ← 或 ERR:<code>
-//! status=200
+//! status=200            ← ERR 时无此行
 //! proto=HTTP_3
 //! reused=true
-//! connect_ms=42        ← 可缺省（QUIC 融合握手仍会有；缺失表示未测到）
-//! first_byte_ms=90     ← 可缺省
+//! connect_ms=42         ← 可缺省（缺失表示未测到）
+//! first_byte_ms=90      ← 可缺省
 //! total_ms=120
-//! body_bytes=1024
-//! hdr=Content-Type: application/json   ← 可 0..N 行；值内的 ':' 由首个 ':' 切分
+//! spki=<64 hex>         ← 可缺省：叶证书 SPKI-SHA256，供 pin 对拍
+//! hdr=Content-Type: application/json   ← 0..N 行，**有序且允许重复键**
+//! hdr=Set-Cookie: a=1
+//! hdr=Set-Cookie: b=2
 //! <空行>
 //! <body 原始字节，长度 = body_bytes>
 //! ```
 //!
-//! 用**首个** ':' 切分 header，是因为 header 值本身常含 ':'（如 URL、时间戳），
-//! 按「所有 ':' 切分」会把值截断 —— 这是 header 解析的经典 bug。
-
-use std::collections::BTreeMap;
+//! ─── 两处刻意的设计（都是踩过的坑）───
+//!
+//! **① header 用首个 ':' 切分**：header 值本身常含 ':'（URL、时间戳），
+//! 按「所有 ':' 切分」会把值截断 —— header 解析的经典 bug。
+//!
+//! **② headers 用有序 Vec 而不是 map**：HTTP **允许重复头**，最典型的是
+//! `Set-Cookie`（一次响应发多个 cookie）与 `Warning`。若用 `BTreeMap` 存，
+//! 重复键会被覆盖 —— **静默丢 cookie**，而且是只在「同时设多个 cookie」的
+//! 场景才出现、本地单测若无重复头样本就永远发现不了的错法。
+//! 顺序也保留：某些服务端依赖头的相对顺序。
+//!
+//! ⚠️ 诚实缺口：QUIC 把 TLS 与传输握手融合，且 quinn 未暴露 cipher/TLS 版本，
+//! 因此本格式**只回传叶证书 SPKI**，不足以在 Kotlin 侧完整重建 `okhttp3.Handshake`。
+//! 合成 Response 时 `handshake` 会置为 null 并单独打标（见 A §3 的诚实清单）。
 
 /// 解析错误。返回具体原因而非 bool，便于 Kotlin 侧诊断。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,12 +71,10 @@ pub struct WireResponse {
     pub first_byte_ms: Option<u64>,
     pub total_ms: u64,
     pub body_bytes: usize,
-    /// 响应头。用 BTreeMap 保证编码顺序稳定（便于对拍逐字节比较）。
-    pub headers: BTreeMap<String, String>,
-}
-
-fn itoa(n: u64) -> String {
-    n.to_string()
+    /// 叶证书 SPKI-SHA256（小写十六进制）。用于两端 pin 对拍。
+    pub spki_sha256: Option<String>,
+    /// 响应头。**有序 + 允许重复键**（见模块头 ②）。
+    pub headers: Vec<(String, String)>,
 }
 
 /// 编码为线格式字节。`body` 必须与 `resp.body_bytes` 一致，否则返回错误。
@@ -81,14 +91,17 @@ pub fn encode(resp: &WireResponse, body: &[u8]) -> Result<Vec<u8>, WireError> {
     head.push_str(&format!("proto={}\n", resp.proto));
     head.push_str(&format!("reused={}\n", resp.reused_connection));
     if let Some(v) = resp.connect_ms {
-        head.push_str(&format!("connect_ms={}\n", itoa(v)));
+        head.push_str(&format!("connect_ms={v}\n"));
     }
     if let Some(v) = resp.first_byte_ms {
-        head.push_str(&format!("first_byte_ms={}\n", itoa(v)));
+        head.push_str(&format!("first_byte_ms={v}\n"));
     }
     head.push_str(&format!("total_ms={}\n", resp.total_ms));
     head.push_str(&format!("body_bytes={}\n", resp.body_bytes));
-    // BTreeMap 迭代顺序即 key 字典序，编码结果确定，便于逐字节对拍。
+    if let Some(spki) = &resp.spki_sha256 {
+        head.push_str(&format!("spki={spki}\n"));
+    }
+    // **按原始顺序逐条 emit**，重复键不合并。
     for (k, v) in &resp.headers {
         head.push_str(&format!("hdr={k}: {v}\n"));
     }
@@ -124,7 +137,8 @@ pub fn decode(buf: &[u8]) -> Result<(WireResponse, Vec<u8>), WireError> {
     let mut first_byte_ms = None;
     let mut total_ms = 0u64;
     let mut body_bytes: Option<usize> = None;
-    let mut headers = BTreeMap::new();
+    let mut spki_sha256 = None;
+    let mut headers: Vec<(String, String)> = Vec::new();
 
     for line in lines {
         if line.is_empty() {
@@ -133,11 +147,12 @@ pub fn decode(buf: &[u8]) -> Result<(WireResponse, Vec<u8>), WireError> {
         if let Some(rest) = line.strip_prefix("hdr=") {
             // 用**首个** ':' 切分：header 值本身常含 ':'。
             if let Some(idx) = rest.find(':') {
-                let k = rest[..idx].trim().to_ascii_lowercase();
-                let v = rest[idx + 1..].trim().to_string();
-                headers.insert(k, v);
+                headers.push((
+                    rest[..idx].trim().to_ascii_lowercase(),
+                    rest[idx + 1..].trim().to_string(),
+                ));
             } else {
-                headers.insert(rest.trim().to_ascii_lowercase(), String::new());
+                headers.push((rest.trim().to_ascii_lowercase(), String::new()));
             }
             continue;
         }
@@ -159,6 +174,7 @@ pub fn decode(buf: &[u8]) -> Result<(WireResponse, Vec<u8>), WireError> {
                 body_bytes =
                     Some(value.parse().map_err(|_| WireError::BadFieldValue("body_bytes"))?)
             }
+            "spki" => spki_sha256 = Some(value.to_string()),
             _ => {}
         }
     }
@@ -179,6 +195,7 @@ pub fn decode(buf: &[u8]) -> Result<(WireResponse, Vec<u8>), WireError> {
             first_byte_ms,
             total_ms,
             body_bytes: declared,
+            spki_sha256,
             headers,
         },
         body,
@@ -197,14 +214,105 @@ fn find_header_end(buf: &[u8]) -> Option<usize> {
     None
 }
 
+// ─────────────────────────────────────────
+// 请求头/响应头的「行格式」编解码
+// ─────────────────────────────────────────
+//
+// JNI 侧传 header 不用 `Map<String, List<String>>`，而用一段文本：
+// 对象多了 JNI 取值要逐次 get，往返次数与出错面都变大；一段文本一次读入、
+// 解析在一处。格式：每行 `Name: value`，行器以 **`\r\n`** 分隔。
+//
+// 为什么必须放内核而不是 JNI 层：这样解析逻辑能在**宿主**上秒级单测
+// （见本模块 #[cfg(test)]），JNI 层保持「只做类型翻译」的薄度。
+// 与 wire::decode 同源，也便于两端对拍。
+//
+// 用 `\r\n` 分行有个安全上的好处：HTTP 头值**本就禁止**含 CR/LF，
+// 因此不会出现「值里带 \n 把一条头劈成两条」的注入类 bug。单测里固化这一点。
+
+/// 编码为 `Name: value\r\n` 行格式。
+pub fn encode_header_lines(headers: &[(String, String)]) -> Vec<u8> {
+    let mut out = String::new();
+    for (k, v) in headers {
+        out.push_str(k);
+        out.push_str(": ");
+        out.push_str(v);
+        out.push_str("\r\n");
+    }
+    out.into_bytes()
+}
+
+/// 解析 `Name: value\r\n` 行格式。
+///
+/// 与 [`decode`] 的 `hdr=` 行同一约定：按**首个** ':' 切分，
+/// **保留顺序与重复键**，没有 ':' 的行按「空值」保留（不静默丢）。
+pub fn decode_header_lines(bytes: &[u8]) -> Vec<(String, String)> {
+    let text = String::from_utf8_lossy(bytes);
+    text.split("\r\n")
+        .filter(|l| !l.is_empty())
+        .map(|line| match line.find(':') {
+            Some(idx) => (line[..idx].trim().to_string(), line[idx + 1..].trim().to_string()),
+            None => (line.trim().to_string(), String::new()),
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod line_tests {
+    use super::*;
+
+    #[test]
+    fn header_lines_roundtrip_preserves_order() {
+        let hs = vec![
+            ("Accept".to_string(), "application/json".to_string()),
+            ("X-Trace".to_string(), "abc".to_string()),
+        ];
+        assert_eq!(decode_header_lines(&encode_header_lines(&hs)), hs);
+    }
+
+    #[test]
+    fn header_lines_value_may_contain_colon() {
+        let hs = vec![("Referer".to_string(), "https://a.b/c:8443/x".to_string())];
+        assert_eq!(decode_header_lines(&encode_header_lines(&hs)), hs);
+    }
+
+    #[test]
+    fn header_lines_do_not_merge_duplicates() {
+        let hs = vec![
+            ("Cookie".to_string(), "a=1".to_string()),
+            ("Cookie".to_string(), "b=2".to_string()),
+        ];
+        assert_eq!(decode_header_lines(&encode_header_lines(&hs)), hs);
+    }
+
+    #[test]
+    fn header_lines_split_on_crlf_not_bare_lf() {
+        // 值里若含裸 \n（调用方不应这么传），不得把一条头劈成两条 ——
+        // 这与「按 \n 分行」的实现有本质区别，是头部注入的防线。
+        let raw = b"A: x\ny\r\nB: z\r\n";
+        let parsed = decode_header_lines(raw);
+        assert_eq!(
+            parsed,
+            vec![
+                ("A".to_string(), "x\ny".to_string()),
+                ("B".to_string(), "z".to_string()),
+            ],
+            "裸 LF 必须留在值内，不得成为分行依据"
+        );
+    }
+
+    #[test]
+    fn header_lines_handle_empty_and_malformed() {
+        assert!(decode_header_lines(b"").is_empty());
+        // 没有 ':' 的行按空值保留，不静默丢弃
+        assert_eq!(decode_header_lines(b"garbage\r\n"), vec![("garbage".to_string(), String::new())]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn sample() -> WireResponse {
-        let mut headers = BTreeMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-        headers.insert("x-trace".to_string(), "2026-10-05T12:00:00Z".to_string());
         WireResponse {
             status: 200,
             proto: "HTTP_3".to_string(),
@@ -213,7 +321,13 @@ mod tests {
             first_byte_ms: Some(90),
             total_ms: 120,
             body_bytes: 5,
-            headers,
+            spki_sha256: Some(
+                "d8a2b48e16bb321bd8bf2e98ccdb3b38ab12b147acda75c1efa559d0fb19b663".to_string(),
+            ),
+            headers: vec![
+                ("content-type".to_string(), "application/json".to_string()),
+                ("x-trace".to_string(), "2026-10-05T12:00:00Z".to_string()),
+            ],
         }
     }
 
@@ -238,14 +352,38 @@ mod tests {
 
     #[test]
     fn header_value_may_contain_colon() {
-        // header 值含 ':' 是常态（时间戳、URL）。若按所有 ':' 切分会截断 vT
+        // header 值含 ':' 是常态（时间戳、URL）。若按所有 ':' 切分会截断值。
         let encoded = encode(&sample(), b"hello").unwrap();
         let (resp, _) = decode(&encoded).unwrap();
         assert_eq!(
-            resp.headers.get("x-trace").map(String::as_str),
+            resp.headers
+                .iter()
+                .find(|(k, _)| k == "x-trace")
+                .map(|(_, v)| v.as_str()),
             Some("2026-10-05T12:00:00Z"),
             "值中的 ':' 不得被当作分隔符"
         );
+    }
+
+    #[test]
+    fn duplicate_headers_are_preserved_in_order() {
+        // ── 这条测试守着「静默丢 cookie」这个 bug ──
+        // 一次响应发多个 Set-Cookie 是常态；用 map 存会覆盖掉除最后一条外的所有 cookie。
+        let mut r = sample();
+        r.headers = vec![
+            ("set-cookie".into(), "a=1; Path=/".into()),
+            ("set-cookie".into(), "b=2; Path=/".into()),
+            ("set-cookie".into(), "c=3; Path=/".into()),
+        ];
+        let encoded = encode(&r, b"hello").unwrap();
+        let (resp, _) = decode(&encoded).unwrap();
+        let cookies: Vec<&str> = resp
+            .headers
+            .iter()
+            .filter(|(k, _)| k == "set-cookie")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        assert_eq!(cookies, vec!["a=1; Path=/", "b=2; Path=/", "c=3; Path=/"], "重复头必须全部保留且有序");
     }
 
     #[test]
@@ -253,10 +391,12 @@ mod tests {
         let mut r = sample();
         r.connect_ms = None;
         r.first_byte_ms = None;
+        r.spki_sha256 = None;
         let encoded = encode(&r, b"hello").unwrap();
         let (resp, _) = decode(&encoded).unwrap();
         assert_eq!(resp.connect_ms, None);
         assert_eq!(resp.first_byte_ms, None);
+        assert_eq!(resp.spki_sha256, None);
     }
 
     #[test]
@@ -270,8 +410,7 @@ mod tests {
     #[test]
     fn decode_rejects_body_length_mismatch() {
         let mut encoded = encode(&sample(), b"hello").unwrap();
-        // 篡改：裁掉一个 body 字节，让实际长度变为 4
-        encoded.truncate(encoded.len() - 1);
+        encoded.truncate(encoded.len() - 1); // 裁掉一个 body 字节
         let err = decode(&encoded).unwrap_err();
         assert_eq!(err, WireError::BodyLengthMismatch { declared: 5, actual: 4 });
     }
@@ -289,7 +428,6 @@ mod tests {
 
     #[test]
     fn decode_rejects_missing_required_field() {
-        // 缺 proto
         let buf = b"OK\nstatus=200\nbody_bytes=0\n\n";
         assert_eq!(decode(buf).unwrap_err(), WireError::MissingField("proto"));
     }

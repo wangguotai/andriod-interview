@@ -100,6 +100,33 @@
         android:layout_height="wrap_content"
         android:text="7.对照：系统DNS vs 自定义DNS" />
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Rust HTTP/3（M2）：路由判定默认关闭；下方按钮用受控配置强制打开做演示"
+        android:textSize="10sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_rust_route"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="8.Rust路由判定" />
+
+        <Button
+            android:id="@+id/btn_rust_fetch"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="9.Rust HTTP/3" />
+    </LinearLayout>
+
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="0dp"

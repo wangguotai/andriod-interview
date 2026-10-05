@@ -22,11 +22,20 @@
 //!
 //! ─── 里程碑说明（诚实标注）───
 //!
-//! 本层当前实现的是**协议边界与控制面**：校验、取消、计时、线格式。
-//! 真正的 QUIC 传输（quinn/rustls）尚未接入 —— 那需要 async runtime，
-//! 而 runtime 如何纳入 `ThreadPools` 的线程治理是必须先解决的问题（见
-//! `rust/README.md` 与设计文档 §4.1）。因此本层不提供 `fetch` 符号，
-//! 避免「有一个名字很唬人的 fetch 其实是空实现」这类假绿。
+//! 本层实现的是**协议边界与控制面**：校验、取消、计时、线格式，以及
+//! **真正的 QUIC/HTTP-3 `fetch`**（见 [android_impl::`Java_..._fetch`]）。
+//!
+//! 关于线程治理这个曾经的前置问题，现已解决：`netlab::h3::fetch` 用
+//! **current-thread runtime + block_on**，IO 由**调用方线程**驱动，
+//! runtime 不额外起 worker 线程 —— 因此网络任务落在 `ThreadPools` 的
+//! net 泳道线程上，命名/配额/背压继续生效（见 netlab/src/h3.rs 模块头）。
+//!
+//! 尚未接入的（缺口，如实列出，见 NETLAB 文档缺口表）：
+//!   · **证书固定（pinning）经 JNI 配置**：kernel 已实现并端到端验证，
+//!     但「把 pin 从 Java 传进 Rust」的通道还没接 —— 当前用默认链校验；
+//!   · QUIC 连接复用（`reused_connection` 恒为 false）；
+//!   · 流式 body（v1 只支持已完整读入内存的小 body）；
+//!   · Android 系统 CA 注入。
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
@@ -59,8 +68,12 @@ pub const ERR_PANIC: i32 = -2;
 /// 也不要「用错线格式静默解析」。这是 native 升级的常规防线。
 ///
 /// 变更记录：
-///   1 → M1：abiVersion / versionString / validateRequest / CancelToken 句柄 / 线格式编解码
-pub const ABI_VERSION: i32 = netlab::ABI_VERSION;
+///   1 → M1：abiVersion / versionString / validateRequest / CancelToken 句柄
+///           / 线格式编解码 / probeHandleRoundTrip
+///   2 → M2：新增 **fetch**（真实 HTTP/3）+ spkiSha256Hex；
+///           线格式 headers 由 map 改为**有序可重复**（否则 Set-Cookie 会被静默覆盖），
+///           并新增 spki 字段。**格式变更 ⇒ ABI 必须 +1**，让旧 Kotlin 明确降级。
+pub const ABI_VERSION: i32 = 2;
 
 /// 日志前缀，便于 logcat 过滤。
 pub const LOG_TAG: &str = netlab::LOG_TAG;

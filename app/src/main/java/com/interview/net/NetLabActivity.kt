@@ -7,6 +7,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.example.myapplication.R
+import com.interview.net.nativebridge.NetLabBridge
 import com.interview.thread.ThreadPools
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -54,6 +55,8 @@ class NetLabActivity : AppCompatActivity() {
         bind(R.id.btn_summary) { emitSummary() }
         bind(R.id.btn_records) { emitRecords() }
         bind(R.id.btn_raw_dns) { runDnsComparison() }
+        bind(R.id.btn_rust_route) { emitRustRoute() }
+        bind(R.id.btn_rust_fetch) { runRustH3Fetch() }
         bind(R.id.btn_clear) {
             log.setLength(0)
             NetMetrics.reset()
@@ -263,6 +266,120 @@ class NetLabActivity : AppCompatActivity() {
     }
 
     // ─────────────────────────────────────────
+    // 8. Rust HTTP/3：路由判定
+    // ─────────────────────────────────────────
+
+    /**
+     * 展示「这次请求会不会走 Rust」以及**为什么**。
+     *
+     * 这是把路由判据从 bool 升级成 [RouteReason] 的收益所在：排查「为什么没生效」时，
+     * 「host 不在白名单」和「网络档位不够」是完全不同的两件事，bool 分不出来。
+     */
+    private fun emitRustRoute() {
+        val url = DEMO_URL
+        emit(
+            """
+            【8. Rust HTTP/3 路由判定】
+            native 可用 = ${NetLabBridge.available}（${NetLabBridge.describe()}）
+            fetch 可用  = ${NetLabBridge.fetchAvailable}
+
+            对 $url 的判定：
+              ${NetClient.explainRoute(url)}
+
+            说明：生产默认 [RustTransportConfig.enabled=false]（装上代码 ≠ 开始接管流量）。
+            [NetClient.explainRoute] 用受控配置演示判定链：主线程/明文/代理 → 方法/body → 白名单/档位。
+            真正的「走 Rust」还需 enabled=true 且档位命中（默认仅 WEAK）。
+            """.trimIndent()
+        )
+    }
+
+    // ─────────────────────────────────────────
+    // 9. Rust HTTP/3：真实请求
+    // ─────────────────────────────────────────
+
+    /**
+     * 用 Rust QUIC 栈发一次真实 HTTP/3 请求。
+     *
+     * ⚠️ 关键：整个调用提交到 [ThreadPools.network] —— `fetch` 是**阻塞式** JNI
+     * 调用，且 IO 在**调用线程**上完成（current-thread runtime + block_on）。
+     * 放主线程 = ANR；放自建线程 = 绕开泳道治理。两者都必须避免。
+     */
+    private fun runRustH3Fetch() {
+        if (!NetLabBridge.fetchAvailable) {
+            emit("【9. Rust HTTP/3】native 不可用：${NetLabBridge.describe()}\n（x86 模拟器上无 arm64 .so 属预期，回退 OkHttp 即可）")
+            return
+        }
+        emit("【9. Rust HTTP/3】已提交到 net 泳道，结果稍后出现…")
+        val accepted = ThreadPools.network.execute(CALLER) {
+            val url = DEMO_URL
+            val t0 = System.nanoTime()
+            val result = NetLabBridge.fetch(
+                url = url,
+                method = "GET",
+                headers = listOf("User-Agent" to "interview-netlab-h3"),
+                body = null,
+                timeoutMillis = 20_000,
+            )
+            val wallMs = (System.nanoTime() - t0) / 1_000_000
+            emit(when (result) {
+                is NetLabBridge.FetchResult.Success -> {
+                    val r = result.response
+                    // 回灌度量：与 OkHttp 路径同口径（不这么做，两条路径无法比较）。
+                    NetMetrics.record(
+                        NetMetrics.Record(
+                            host = DEMO_HOST,
+                            method = "GET",
+                            code = r.status,
+                            ok = r.status in 200..299,
+                            protocol = r.protocol,
+                            reusedConnection = r.reusedConnection,
+                            fromCache = false,
+                            responseBytes = r.body.size.toLong(),
+                            stage = NetMetrics.Stage(
+                                dnsMillis = -1, // Rust 路径的 DNS 由传入 IP 承担，v1 未单独采集
+                                connectMillis = r.connectMillis, // ⚠️ QUIC 含融合 TLS，与 TCP 口径不可直接比
+                                tlsMillis = -1,
+                                firstByteMillis = r.firstByteMillis,
+                                totalMillis = r.totalMillis,
+                            ),
+                            errorMessage = null,
+                        )
+                    )
+                    """
+                    【9. Rust HTTP/3】✅ 成功
+                      url           = $url
+                      status        = ${r.status}
+                      protocol      = ${r.protocol}（OkHttp Protocol.QUIC）
+                      connect_ms    = ${r.connectMillis}（含融合的 TLS 握手）
+                      first_byte_ms = ${r.firstByteMillis}
+                      total_ms      = ${r.totalMillis}
+                      墙钟          = ${wallMs}ms（含跨 FFI 开销）
+                      body          = ${r.body.size} B / headers ${r.headers.size} 项
+                      叶证书 SPKI   = ${r.peerSpkiSha256?.take(16) ?: "n/a"}…
+
+                    已回灌 NetMetrics（点「6.逐条记录」能看到 protocol=HTTP_3 这条）。
+                    ⚠️ QUIC 的 connect 段含 TLS，与 TCP 路径的 connect/tls 分段**口径不同**，
+                    不要把两者的平均值直接相减得出"谁更快"。
+                    """.trimIndent()
+                }
+                is NetLabBridge.FetchResult.Failure -> {
+                    val kind = when {
+                        result.isPinMismatch -> "（安全事件：证书固定失败）"
+                        result.isCancelled -> "（已取消）"
+                        else -> ""
+                    }
+                    "【9. Rust HTTP/3】❌ 失败$kind\n  code=${result.code}\n  ${result.message}\n\n" +
+                        "注意：这里**不自动回退** —— 实验页要让你看到真实失败。生产接缝里由\n" +
+                        "RustTransportInterceptor 上抛 IOException，交回 OkHttp 既有失败/重试链。"
+                }
+            })
+        }
+        if (!accepted) {
+            emit("⚠ 网络泳道拒绝（配额/队列满）—— 背压，不是 bug")
+        }
+    }
+
+    // ─────────────────────────────────────────
 
     private fun bind(id: Int, action: () -> Unit) {
         findViewById<Button>(id).setOnClickListener {
@@ -282,5 +399,9 @@ class NetLabActivity : AppCompatActivity() {
 
         /** 调用方标识：与图片模块区分，便于泳道配额归因。 */
         private const val CALLER = "interview.netlab"
+
+        /** Rust HTTP/3 演示目标。必须 https 且在判定链中可放行。 */
+        private const val DEMO_URL = "https://api.github.com/zen"
+        private const val DEMO_HOST = "api.github.com"
     }
 }

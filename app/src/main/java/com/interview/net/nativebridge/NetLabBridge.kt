@@ -12,13 +12,19 @@ import android.util.Log
  * 与 [com.interview.image.nativebridge.ImagePipelineBridge] 同构：上层只认这里，
  * 不直接碰 `external` 方法；native 不可用时**安静降级**，绝不崩在 UnsatisfiedLinkError。
  *
- * ─── ⚠️ 当前实现的范围（诚实标注，别误读）───
+ * ─── 当前实现的范围（诚实标注，别误读）───
  *
- * 本类目前暴露的是**协议边界与控制面**：请求准入校验、取消令牌、线格式解码。
- * **它不提供 `fetch`** —— 真正的 QUIC 传输（quinn/rustls）尚未接入，原因见
- * [rust/netlab-android/src/lib.rs] 与设计文档 §4.1（async runtime 如何纳入
- * ThreadPools 线程治理尚未解决）。因此这里**刻意不存在一个「看起来能发请求
- * 但其实是空实现」的方法** —— 那正是最典型的假绿。
+ * 本类暴露三层能力：
+ *   1. **协议边界与控制面**：请求准入校验、取消令牌、线格式解码；
+ *   2. **真实 HTTP/3 传输**：[fetch]（基于 kernel 的 quinn/rustls），**阻塞式**，
+ *      必须在网络泳道线程上调用；
+ *   3. **安全对拍**：[spkiSha256Hex]，与 OkHttp `CertificatePinner` 比对同一张证书的指纹。
+ *
+ * ⚠️ 尚未接入的缺口（见 [NetLabBridge] 的 fetch 注释与 NETLAB 文档）：
+ *   · 证书固定（pinning）的**配置通道**：kernel 已实现并有端到端验证，
+ *     但「把 pin 从 Java 传进 Rust」还没接，故当前 fetch 走默认链路校验；
+ *   · QUIC 连接复用（`reusedConnection` 恒为 false）；
+ *   · 流式 body；Android 系统 CA 注入。
  *
  * 设计文档：[DESIGN-rust-transport.md]、可行性：[CRONET-FEASIBILITY.md]。
  */
@@ -27,14 +33,9 @@ object NetLabBridge {
     private const val TAG = "NetLabNative"
 
     /** 与 `netlab_android::ABI_VERSION` 对齐；不匹配说明 APK 里是旧 .so。 */
-    const val EXPECTED_ABI_VERSION = 1
+    const val EXPECTED_ABI_VERSION = 2
 
-    /**
-     * native 库是否加载且 ABI 匹配。
-     *
-     * native 库**只编 arm64-v8a**（与图像侧同一取舍）。x86 模拟器上会是 false，
-     * 此时所有 [NetLabBridge] 功能降级为「不可用」，调用方应回退 OkHttp。
-     */
+    /** native 库是否加载且 ABI 匹配。 */
     val available: Boolean by lazy {
         if (!NetLabNative.loaded) {
             Log.w(TAG, "native 库未加载：${NetLabNative.loadError}")
@@ -49,6 +50,16 @@ object NetLabBridge {
             }
         }
     }
+
+    /**
+     * `fetch` 是否可用。
+     *
+     * 与 [available] 分开是刻意的：`available` 只说明库加载了、ABI 对了；
+     * 而 `fetch` 是**会真的发网络请求**的能力，未来若要按灰度/实验开关单独控制，
+     * 应只影响这一个判据，而不是把整个 native 层判成不可用。
+     * 目前两者等价，但语义不同，分开写避免以后改错地方。
+     */
+    val fetchAvailable: Boolean get() = available
 
     /** 人类可读的运行时信息，打日志/上屏用。 */
     fun describe(): String = buildString {
@@ -114,6 +125,9 @@ object NetLabBridge {
      * native 不可用时 [newToken] 返回 null，调用方走 OkHttp（那边用 `Call.cancel()`）。
      */
     class CancelTokenHandle internal constructor(private val handle: Long) : AutoCloseable {
+        /** 裸句柄，供传给 [fetch] 的 `cancelHandle`。**不要在其他地方使用**。 */
+        internal val rawHandle: Long get() = handle
+
         /** 请求取消；返回「本次是否真正翻转了状态」。 */
         fun cancel(): Boolean =
             handle != 0L && runCatching { NetLabNative.cancelTokenCancel(handle) }.getOrDefault(false)
@@ -159,5 +173,201 @@ object NetLabBridge {
             // 恰好释放一次 —— 这正是用 AutoCloseable 而不是裸 Long 的收益。
             runCatching { NetLabNative.cancelTokenFree(handle) }
         }
+    }
+
+    // ─────────────────────────────────────────
+    // HTTP/3 fetch（M2）
+    // ─────────────────────────────────────────
+
+    /** HTTP 方法白名单。与 Rust 侧 `request::ALLOWED_METHODS` **必须一致**（有单测钉）。 */
+    val allowedMethods: Set<String> = setOf("GET", "HEAD", "PUT", "DELETE")
+
+    /**
+     * 一次 HTTP/3 传输的结果。
+     *
+     * `peerSpkiSha256` 是**叶证书的 SPKI-SHA256**，用于与 OkHttp `CertificatePinner`
+     * 对拍（同一张证书两侧必须算出一致指纹）。v1 不会用它做信任决策 ——
+     * 信任判定在 rustls 握手内完成。
+     */
+    data class NativeResponse(
+        val status: Int,
+        val protocol: String,
+        val reusedConnection: Boolean,
+        val connectMillis: Long,
+        val firstByteMillis: Long,
+        val totalMillis: Long,
+        /** 响应头，**有序且允许重复键**（Set-Cookie 必须全部保留）。 */
+        val headers: List<Pair<String, String>>,
+        val body: ByteArray,
+        val peerSpkiSha256: String?,
+    ) {
+        // data class 含 ByteArray 时自动生成的 equals/hashCode 是**按引用比较**的，
+        // 与「值相等」直觉不符，且会让单测里 assertEq 莫名失败。显式覆写。
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is NativeResponse) return false
+            return status == other.status &&
+                protocol == other.protocol &&
+                reusedConnection == other.reusedConnection &&
+                connectMillis == other.connectMillis &&
+                firstByteMillis == other.firstByteMillis &&
+                totalMillis == other.totalMillis &&
+                headers == other.headers &&
+                body.contentEquals(other.body) &&
+                peerSpkiSha256 == other.peerSpkiSha256
+        }
+
+        override fun hashCode(): Int {
+            var result = status
+            result = 31 * result + protocol.hashCode()
+            result = 31 * result + reusedConnection.hashCode()
+            result = 31 * result + connectMillis.hashCode()
+            result = 31 * result + firstByteMillis.hashCode()
+            result = 31 * result + totalMillis.hashCode()
+            result = 31 * result + headers.hashCode()
+            result = 31 * result + body.contentHashCode()
+            result = 31 * result + (peerSpkiSha256?.hashCode() ?: 0)
+            return result
+        }
+    }
+
+    /** fetch 的失败结果（Rust 侧明确拒绝/失败，或 native 不可用）。 */
+    sealed interface FetchResult {
+        data class Success(val response: NativeResponse) : FetchResult
+
+        /**
+         * 失败。`code` 与 Rust `FetchError::code()` / `RejectReason::code()` 对应；
+         * `code == -1` 表示「native 不可用」。
+         */
+        data class Failure(val code: Int, val message: String) : FetchResult {
+            /** 是否是证书固定（pinning）失败 —— 安全事件，不应被当作普通网络抖动重试。 */
+            val isPinMismatch: Boolean get() = message.contains("SPKI-PIN-MISMATCH")
+
+            /** 是否被取消（协作式），与真失败语义不同。 */
+            val isCancelled: Boolean get() = code == 12
+        }
+    }
+
+    /**
+     * 发起一次 HTTP/3 请求。**阻塞式**——调用方必须在网络泳道线程上调用。
+     *
+     * native 不可用时返回 `Failure(-1, ...)`，调用方应回退 OkHttp（不是抛异常）。
+     */
+    fun fetch(
+        url: String,
+        method: String,
+        headers: List<Pair<String, String>> = emptyList(),
+        body: ByteArray? = null,
+        timeoutMillis: Long = 15_000,
+        cancelHandle: CancelTokenHandle? = null,
+    ): FetchResult {
+        if (!fetchAvailable) {
+            return FetchResult.Failure(-1, "native 不可用：${NetLabNative.loadError ?: "ABI 不匹配"}")
+        }
+        val bytes = runCatching {
+            NetLabNative.fetch(
+                url = url,
+                method = method,
+                headers = encodeHeaderLines(headers),
+                body = body,
+                timeoutMs = timeoutMillis,
+                cancelHandle = cancelHandle?.rawHandle ?: 0L,
+            )
+        }.getOrNull() ?: return FetchResult.Failure(-1, "JNI 调用失败（可能 native 崩溃被拦）")
+
+        return parseWire(bytes)
+    }
+
+    /**
+     * 计算证书 SPKI-SHA256（不连网）。用于与 OkHttp `CertificatePinner` 对拍。
+     */
+    fun spkiSha256Hex(certDer: ByteArray): String? {
+        if (!available) return null
+        return runCatching { NetLabNative.spkiSha256Hex(certDer) }.getOrNull()
+    }
+
+    /** 与 Rust `wire::encode_header_lines` 对应：`Name: value\r\n`。 */
+    internal fun encodeHeaderLines(headers: List<Pair<String, String>>): ByteArray =
+        headers.joinToString(separator = "") { (k, v) -> "$k: $v\r\n" }.toByteArray(Charsets.UTF_8)
+
+    /**
+     * 解析 Rust 侧线格式。**必须与 `rust/netlab/src/wire.rs` 严格一致**，
+     * 否则会解析出错值且不报错 —— 这正是「跨语言重复实现」要重点防的。
+     *
+     * 黄金样本对拍见 `NetLabWireParityTest`（十六进制串由 `cargo run --example wire_golden` 生成）。
+     */
+    internal fun parseWire(bytes: ByteArray): FetchResult {
+        val sep = findHeaderEnd(bytes) ?: return FetchResult.Failure(-1, "线格式缺少空行分隔")
+        val head = String(bytes, 0, sep, Charsets.UTF_8)
+        val body = bytes.copyOfRange(sep, bytes.size)
+        val lines = head.split('\n')
+
+        val first = lines.firstOrNull()?.trim().orEmpty()
+        if (first.startsWith("ERR:")) {
+            val code = first.removePrefix("ERR:").trim().toIntOrNull() ?: -1
+            val msg = lines.drop(1).firstOrNull { it.startsWith("msg=") }
+                ?.removePrefix("msg=") ?: ""
+            return FetchResult.Failure(code, msg)
+        }
+        if (first != "OK") return FetchResult.Failure(-1, "线格式首行非法：$first")
+
+        var status = -1
+        var proto = "?"
+        var reused = false
+        var connectMs = -1L
+        var firstByteMs = -1L
+        var totalMs = 0L
+        var bodyBytes = 0L
+        var spki: String? = null
+        val headers = ArrayList<Pair<String, String>>()
+
+        for (line in lines.drop(1)) {
+            if (line.isEmpty()) continue
+            if (line.startsWith("hdr=")) {
+                // 按**首个** ':' 切分：值本身可含 ':'（时间戳、URL）。
+                val rest = line.substring(4)
+                val idx = rest.indexOf(':')
+                if (idx >= 0) {
+                    headers += rest.substring(0, idx).trim().lowercase() to
+                        rest.substring(idx + 1).trim()
+                } else {
+                    headers += rest.trim().lowercase() to ""
+                }
+                continue
+            }
+            val eq = line.indexOf('=')
+            if (eq < 0) continue // 未知行：忽略（前向兼容）
+            val key = line.substring(0, eq)
+            val value = line.substring(eq + 1)
+            when (key) {
+                "status" -> status = value.toIntOrNull() ?: return FetchResult.Failure(-1, "status 非法")
+                "proto" -> proto = value
+                "reused" -> reused = value == "true"
+                "connect_ms" -> connectMs = value.toLongOrNull() ?: -1
+                "first_byte_ms" -> firstByteMs = value.toLongOrNull() ?: -1
+                "total_ms" -> totalMs = value.toLongOrNull() ?: 0
+                "body_bytes" -> bodyBytes = value.toLongOrNull() ?: 0
+                "spki" -> spki = value
+                else -> {}
+            }
+        }
+        if (status < 0) return FetchResult.Failure(-1, "线格式缺少必填字段 status")
+        if (bodyBytes != body.size.toLong()) {
+            // 长度不符是**最危险**的错法（会读到错位 body）——宁可失败也不猜。
+            return FetchResult.Failure(-1, "body 长度不符：声明 $bodyBytes 实际 ${body.size}")
+        }
+        return FetchResult.Success(
+            NativeResponse(status, proto, reused, connectMs, firstByteMs, totalMs, headers, body, spki)
+        )
+    }
+
+    /** 找头部与 body 的分界（连续两个 `\n` 之后）。 */
+    private fun findHeaderEnd(bytes: ByteArray): Int? {
+        var i = 0
+        while (i + 1 < bytes.size) {
+            if (bytes[i] == '\n'.code.toByte() && bytes[i + 1] == '\n'.code.toByte()) return i + 2
+            i++
+        }
+        return null
     }
 }

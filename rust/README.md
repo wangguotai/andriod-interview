@@ -11,7 +11,9 @@ rust/
 ├── imagepipeline/   # 纯计算内核：零 Android / 零 JNI
 │   └── cargo test  ← 这是日常开发的反馈回路，秒级
 ├── android/         # JNI 绑定：只做类型翻译 + 错误码 + panic 拦截
-└── ipclab/          # 跨进程通信 Lab 的 native 侧（pipe/fifo/memfd/SCM_RIGHTS/signal/flock）
+├── ipclab/          # 跨进程通信 Lab 的 native 侧（pipe/fifo/memfd/SCM_RIGHTS/signal/flock）
+├── netlab/          # 网络传输内核：请求校验/取消/计时/线格式（纯逻辑）+ h3（quinn/rustls）
+└── netlab-android/  # 上面那套的 JNI 绑定（薄层，同 android 的纪律）
 ```
 
 > `ipclab` 是 `:ipc-lab` module 自己的 native 核心，与上面「图像性能」那条线**无关**，
@@ -58,3 +60,19 @@ cargo build --manifest-path rust/android/Cargo.toml --target aarch64-linux-andro
 - native 计算**必须**由 Kotlin 侧经 `ThreadPools` 泳道调度，不能在 native 里自建线程，
   否则绕过全 App 的线程命名/配额治理（`thread-lint` 的三条规则也拦不到 native 线程）。
 - Rust 内部若未来引入 rayon 等线程库，需要先想清楚它如何纳入既有治理协议，再开。
+
+### netlab 的 h3 传输：如何纳入上述约束（登记）
+
+网络传输比图像计算更容易踩这条线，因为 QUIC 库通常自带 async runtime。本仓库的处理方式：
+
+- `netlab::h3::fetch` 是**阻塞式** API，内部用 **current-thread runtime + `block_on`**；
+  runtime **不额外起 worker 线程**，UDP 收发/定时器由**调用方线程**驱动。
+  `netlab/Cargo.toml` 刻意**不开** tokio 的 `rt-multi-thread` feature，从依赖层面兜住。
+- ⇒ 因此 **Kotlin 侧必须在 `ThreadPools` 的 net 泳道线程上调用 `fetch`**（它是阻塞式 JNI 调用）。
+  放主线程 = ANR；放自建线程 = 绕开泳道治理。两者都禁止。
+- 后果是有意的：单次 fetch 的并发度受 net 泳道 core 数约束，而不是另起一套无治理的并发。
+- 取消是**协作式**的：`block_on` 内每 50ms 轮询取消标志，命中即丢弃整个 future。
+  它不是硬中断，不能打断底层 socket syscall —— 该缺口在 `h3.rs` 与 `NOTES-netlab.md` 里明确标注。
+
+> 未做（若要做需再登记一次）：QUIC **连接复用**需要长驻 runtime，届时应由**单条**在
+> `ThreadPools` 登记过的任务驱动，而不是让 runtime 自己起线程。

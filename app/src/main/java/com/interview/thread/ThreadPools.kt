@@ -192,6 +192,7 @@ object ThreadPools {
         private val submittedCount = AtomicLong(0)
         private val rejectedByQueue = AtomicLong(0)
         private val rejectedByQuota = AtomicLong(0)
+        private val errorCount = AtomicLong(0)
         private val waitSamples = ConcurrentLinkedQueue<Long>()
         private val inflight = ConcurrentHashMap<String, AtomicInteger>()
 
@@ -206,6 +207,7 @@ object ThreadPools {
             val submitted: Long,
             val rejectedByQueue: Long,
             val rejectedByQuota: Long,
+            val errors: Long,
             /** 任务从入队到开始执行的 P99 等待耗时（毫秒） */
             val waitP99Millis: Long,
         ) {
@@ -231,6 +233,7 @@ object ThreadPools {
                 submitted = submittedCount.get(),
                 rejectedByQueue = rejectedByQueue.get(),
                 rejectedByQuota = rejectedByQuota.get(),
+                errors = errorCount.get(),
                 waitP99Millis = p99 / 1_000_000,
             )
         }
@@ -245,7 +248,7 @@ object ThreadPools {
             val counter = inflight.computeIfAbsent(caller) { AtomicInteger() }
             if (counter.get() >= quotaPerCaller) {
                 rejectedByQuota.incrementAndGet()
-                Log.w(TAG, "[$name] 配额拒绝：caller=$caller 在途=${counter.get()}/$quotaPerCaller")
+                ThreadErrorReporter.onRejected(name, caller, "配额超限 ${counter.get()}/$quotaPerCaller")
                 return false
             }
             counter.incrementAndGet()
@@ -255,7 +258,15 @@ object ThreadPools {
                 executor.execute {
                     recordWait(System.nanoTime() - enqueuedAt)
                     try {
+                        // ⚠️ 异常必须在这里被接住并统一上报。
+                        // 若放任它抛出去：execute() 路径会走到 worker 线程的
+                        // UncaughtExceptionHandler，而 Android 默认 handler 是
+                        // KillApplicationHandler —— 直接杀进程。
                         task.run()
+                    } catch (t: Throwable) {
+                        errorCount.incrementAndGet()
+                        ThreadErrorReporter.onTaskError(name, caller, t)
+                        if (ThreadErrorReporter.failFast) throw t
                     } finally {
                         counter.decrementAndGet()
                     }
@@ -265,7 +276,7 @@ object ThreadPools {
                 // 2) 队列满：有界队列带来的背压，在此显式返回给调用方
                 counter.decrementAndGet()
                 rejectedByQueue.incrementAndGet()
-                Log.w(TAG, "[$name] 队列拒绝：caller=$caller 队列已满 $queueCapacity")
+                ThreadErrorReporter.onRejected(name, caller, "队列已满 $queueCapacity")
                 false
             }
         }
@@ -331,7 +342,7 @@ object ThreadPools {
         ThreadPoolExecutor(
             CORE_CPU, CORE_CPU, 30L, TimeUnit.SECONDS,
             LinkedBlockingQueue(CPU_QUEUE_CAPACITY),
-            NamedThreadFactory("app-cpu"),
+            guardedFactory("cpu", "app-cpu", Process.THREAD_PRIORITY_DEFAULT),
         )
     }
 
@@ -340,7 +351,7 @@ object ThreadPools {
         ThreadPoolExecutor(
             1, 1, 0L, TimeUnit.MILLISECONDS,
             LinkedBlockingQueue(128),
-            NamedThreadFactory("app-single"),
+            guardedFactory("single", "app-single", Process.THREAD_PRIORITY_DEFAULT),
         )
     }
 
@@ -348,7 +359,7 @@ object ThreadPools {
     val scheduled: ScheduledExecutorService by lazy {
         Executors.newScheduledThreadPool(
             2,
-            NamedThreadFactory("app-scheduled", androidPriority = Process.THREAD_PRIORITY_BACKGROUND),
+            guardedFactory("scheduled", "app-scheduled", Process.THREAD_PRIORITY_BACKGROUND),
         )
     }
 
@@ -489,10 +500,40 @@ object ThreadPools {
 
     private fun formatLane(lane: Lane): String {
         val m = lane.metrics()
-        return "%-9s core=%d max=%d 实际=%d 活跃=%d 队列=%-11s 提交=%d 拒绝(队列/配额)=%d/%d waitP99=%dms"
+        return "%-9s core=%d max=%d 实际=%d 活跃=%d 队列=%-11s 提交=%d 拒绝(队列/配额)=%d/%d 异常=%d waitP99=%dms"
             .format(
                 m.name, m.core, m.max, m.poolSize, m.active, m.queueText,
-                m.submitted, m.rejectedByQueue, m.rejectedByQuota, m.waitP99Millis,
+                m.submitted, m.rejectedByQueue, m.rejectedByQuota, m.errors, m.waitP99Millis,
             )
+    }
+
+    // ─────────────────────────────────────────────
+    // 统一异常捕获（非 Lane 池）
+    // ─────────────────────────────────────────────
+
+    /**
+     * 把 Runnable 包成「异常不会逃逸」的版本。
+     *
+     * 为什么需要：`ThreadPoolExecutor.execute()` 提交的任务若抛异常，
+     * 会走到该 worker 线程的 UncaughtExceptionHandler。Android 默认的是
+     * KillApplicationHandler —— **直接杀进程**。
+     *
+     * `Lane` 内部已自带 try/catch；cpu / single 这类裸 ThreadPoolExecutor
+     * 没有，所以用一个 ThreadFactory 统一包一层最省事且不会漏。
+     *
+     * @param lane 归因用的泳道名
+     */
+    private fun guardedFactory(lane: String, prefix: String, androidPriority: Int): ThreadFactory {
+        val inner = NamedThreadFactory(prefix, androidPriority = androidPriority)
+        return ThreadFactory { r ->
+            inner.newThread {
+                try {
+                    r.run()
+                } catch (t: Throwable) {
+                    ThreadErrorReporter.onTaskError(lane, "direct-execute", t)
+                    if (ThreadErrorReporter.failFast) throw t
+                }
+            }
+        }
     }
 }

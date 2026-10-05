@@ -144,6 +144,74 @@ class ThreadGovernanceActivity : AppCompatActivity() {
             emit("【Hook 治理已关闭】恢复纯观测（全部放行）。\n再点「制造失控」即对照组：线程正常大量创建。")
         }
 
+        bind(R.id.btn_error_guard) {
+            CrashGuard.install(swallowBackground = true)
+            emit(
+                "【全局异常兜底已安装】\n" +
+                        "原理：execute() 提交的任务抛异常会走到 worker 线程的\n" +
+                        "UncaughtExceptionHandler，Android 默认实现是\n" +
+                        "KillApplicationHandler —— **直接杀进程**。\n" +
+                        "装兜底后：后台线程异常 → 上报 + 吞掉（App 存活）；\n" +
+                        "主线程异常仍然崩（吞掉会留下状态不一致的 App，更难查）。\n\n" +
+                        "现在点「触发异常」验证。"
+            )
+        }
+
+        bind(R.id.btn_error_fire) {
+            // 1) 各泳道的任务异常（覆盖 Lane 的 try/catch 上报）
+            ThreadPools.network.execute("demo.network") { throw IllegalStateException("网络解析失败") }
+            ThreadPools.disk.execute("demo.disk") { throw java.io.IOException("文件读取失败") }
+            ThreadPools.dbWrite.execute("demo.db") { throw IllegalStateException("SQLite 约束冲突") }
+            // 2) 非 Lane 池（覆盖 guardedFactory 上报）
+            ThreadPools.cpu.execute { throw ArithmeticException("/ by zero") }
+            // 3) 重复抛同一异常，验证「日志限流 + 计数继续」
+            repeat(8) { ThreadPools.background.execute("demo.bg") { throw RuntimeException("后台任务反复失败") } }
+            // 4) 拒绝路径：占住 dbWrite（core=max=1），灌满 16 格队列，再投一个必然被拒
+            val hold = java.util.concurrent.CountDownLatch(1)
+            val released = java.util.concurrent.CountDownLatch(1)
+            ThreadPools.dbWrite.execute("demo.backpressure") {
+                released.countDown()
+                hold.await()
+            }
+            released.await(1, TimeUnit.SECONDS)
+            repeat(16) { i -> ThreadPools.dbWrite.execute("demo.backpressure") { Thread.sleep(5) } }
+            val accepted = ThreadPools.dbWrite.execute("demo.backpressure") { Thread.sleep(5) }
+            hold.countDown()
+
+            emit(
+                "已投放各类异常任务（含重复异常与限流验证）。\n" +
+                        "背压验证：第 18 个任务被接受=$accepted（false = 队列满，已计入拒绝统计）\n" +
+                        "点「异常报告」查看聚合结果。"
+            )
+        }
+
+        bind(R.id.btn_error_report) {
+            emit("【线程异常统一收集报告】\n${ThreadErrorReporter.formatReport()}")
+        }
+
+        bind(R.id.btn_error_raw) {
+            // ⚠️ 危险对照：故意用无防护的裸池，验证「不接异常真的会杀进程」
+            emit(
+                "【对照实验：无防护的裸线程池】\n" +
+                        "即将向一个没有异常防护的池提交抛异常的任务。\n" +
+                        "预期：app 进程被杀（logcat 可见 FATAL EXCEPTION）。\n" +
+                        "这就是「线程池异常收集」没做好时的真实后果。\n\n" +
+                        "⚠️ 若下方没有后续输出，说明进程确实崩了 —— 这正是实验目的。"
+            )
+            val rawPool = java.util.concurrent.ThreadPoolExecutor(
+                1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+                java.util.concurrent.LinkedBlockingQueue(4),
+            )
+            rawPool.execute {
+                throw IllegalStateException("未防护的线程池任务异常 → 应导致进程被杀")
+            }
+        }
+
+        bind(R.id.btn_error_reset) {
+            ThreadErrorReporter.reset()
+            emit("异常统计已清空")
+        }
+
         bind(R.id.btn_native_count) {
             val sites = NativeThreadHook.creationSitesSnapshot(12)
             emit(buildString {

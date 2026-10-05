@@ -488,6 +488,57 @@ Hook 治「运行时的行为」。三者互补，不是替代。**
 
 ---
 
+## 统一收集线程池报错
+
+线程池的异常之所以「难收集」，是因为它有**三条互不相通的路径**，任何一条没接住都是静默失败：
+
+| 提交方式 | 异常去向 | 不接住的后果 |
+|---|---|---|
+| `execute()` | worker 线程的 `UncaughtExceptionHandler` | Android 默认 handler = `RuntimeInit$KillApplicationHandler` → **杀整个 App** |
+| `submit()` | 被吞进 `Future` | 不调 `Future.get()` 就**永远不知道任务炸了** |
+| 被拒绝（队列满/配额） | 根本没执行 | 不检查 `execute()` 返回值 → 任务**凭空消失，连异常都没有** |
+
+### 实现
+
+- **`ThreadErrorReporter`**：按 `(泳道, 调用方, 异常类型)` 聚合计数，而不是逐条打日志。
+  同一 site 只完整打前 5 次堆栈，之后静默但**继续计数**——异常循环时打日志本身是二次伤害。
+  提供可插拔 `sink` 接崩溃平台；`failFast` 开关控制「上报后是吞还是继续抛」。
+- **`Lane.execute` 内层 try/catch**：泳道任务的全部异常在此归因上报。
+  这是**唯一**入口，避免 `afterExecute` 与任务内 catch 双重上报。
+- **`guardedFactory`**：`cpu` / `single` / `scheduled` 这类裸池没有 `Lane` 包装，
+  用一个 ThreadFactory 统一套一层，兜住 `execute()` 路径。
+- **`CrashGuard`**：全局 `UncaughtExceptionHandler` 兜底。
+  ⚠️ **主线程异常仍交给原 handler（必须崩）**——吞掉只会留下状态不一致的假活 App，比崩溃更难查；
+  只有后台线程异常才「上报 + 吞掉」。
+
+### 一个必须知道的平台细节（实测）
+
+安装了全局 handler 之后，**logcat 里仍然会出现 `FATAL EXCEPTION` 那一行**，但进程不会死。
+
+原因：Android 的 `UncaughtExceptionHandler` 链是
+
+```
+线程默认 handler → RuntimeInit$KillApplicationHandler
+                     ├─ 1. 打 FATAL EXCEPTION（Clog_e）
+                     ├─ 2. thread.getUncaughtExceptionHandler()?.uncaughtException()  ← 你的 handler
+                     └─ 3. killProcess()
+```
+
+它在**第 1 步就把 FATAL 打出来了**，然后才把异常交给线程自定义 handler。
+所以 **`FATAL EXCEPTION` 行 ≠ 进程一定死了**。
+
+本仓库用「无防护对照」按钮做过完整对照（emulator-5554, API 36）：
+
+| 场景 | FATAL 行 | 进程 |
+|---|---|---|
+| 无兜底，裸池 `execute()` 抛异常 | 有 | **死**（PID 消失，回到桌面） |
+| 装了兜底，同一任务 | 有 | **活**（PID 不变，App 继续可用） |
+| 走 `Lane` / `guardedFactory` 的任务 | **无** | **活**（异常被内层接住，压根没逃逸） |
+
+→ 判断是否真的崩了，**看 PID，不要看 FATAL 行**。
+
+---
+
 ## ⚠️ 两个真实的平台坑（本 Demo 踩过并修复）
 
 这两处是写这套方案时最容易翻车的地方，也是本实现相较于网上简易示例的主要价值。

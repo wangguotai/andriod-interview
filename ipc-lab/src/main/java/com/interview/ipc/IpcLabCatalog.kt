@@ -8,7 +8,7 @@ package com.interview.ipc
  * 新增一个演示 = 在 [DEMOS] 里加一条 + 在 [IpcDemoRunner] 里注册实现。
  * 首页与汇总页都只读这里，不硬编码任何演示。
  *
- * 本文件随里程碑逐步生长：M3 追加 POSIX 信号。
+ * 本文件随里程碑逐步生长：M4 追加 flock。
  */
 object IpcLabCatalog {
 
@@ -57,6 +57,13 @@ object IpcLabCatalog {
             subtitle = "sigaction + SA_SIGINFO 读 si_pid、实时信号不合并、sigsuspend 消除竞态",
             layer = IpcLayer.LINUX,
             model = IpcModel.SIGNAL,
+        ),
+        IpcDemo(
+            id = "native_flock",
+            title = "flock 文件锁 (Rust)",
+            subtitle = "fork 出子进程争锁：父持锁则子 LOCK_EX|LOCK_NB 回 EWOULDBLOCK（单实例原理）",
+            layer = IpcLayer.LINUX,
+            model = IpcModel.LOCK,
         ),
     )
 

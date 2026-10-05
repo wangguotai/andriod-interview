@@ -9,6 +9,7 @@
 //! ─── 模块划分 ───
 //!
 //! - [`sys`]：原始 syscall 包装，统一把失败翻译成 `Err(-errno)`，零业务逻辑。
+//! - [`filelock`]：`flock` 文件锁演示。
 //! - [`pipe`]：匿名管道 `pipe2` 与命名管道 FIFO 的演示。
 //! - [`signal`]：POSIX 信号（`kill` + `SA_SIGINFO`）演示。
 //! - [`stream`]：AF_UNIX（abstract / filesystem）字节流演示。
@@ -29,6 +30,8 @@
 
 pub mod demo;
 #[cfg(ipc_linux)]
+pub mod filelock;
+#[cfg(ipc_linux)]
 pub mod pipe;
 #[cfg(ipc_linux)]
 pub mod signal;
@@ -48,7 +51,7 @@ pub const LOG_TAG: &str = "IpcLabNative";
 /// 稳定 ABI 版本号。Kotlin 侧加载后比对，不匹配即显式降级，绝不用错布局静默算错。
 ///
 /// 变更记录：
-///   1 → 初版：AF_UNIX（abstract / filesystem）字节流、匿名管道 / FIFO、POSIX 信号
+///   1 → 初版：AF_UNIX（abstract / filesystem）字节流、匿名管道 / FIFO、POSIX 信号、flock
 pub const ABI_VERSION: i32 = 1;
 
 #[cfg(ipc_linux)]

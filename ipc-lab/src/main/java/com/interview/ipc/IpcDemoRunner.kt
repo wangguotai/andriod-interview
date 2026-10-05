@@ -22,7 +22,7 @@ import java.net.Socket
  * - runner 必须**有界**：涉及等待的地方一律带超时，绝不允许把演示线程挂死。
  * - 证据日志的第一原则：**带上 pid/tid**。没有 pid 的「跨进程」结论不成立。
  *
- * 本文件随里程碑逐步生长：M3 追加 POSIX 信号。
+ * 本文件随里程碑逐步生长：M4 追加 flock。
  */
 object IpcDemoRunner {
 
@@ -37,6 +37,7 @@ object IpcDemoRunner {
             "native_pipe" -> nativeDemo(context, IpcNativeBridge.KIND_PIPE, "")
             "native_fifo" -> nativeDemo(context, IpcNativeBridge.KIND_FIFO, workPath(context, "demo.fifo"))
             "native_signal" -> nativeDemo(context, IpcNativeBridge.KIND_SIGNAL, "")
+            "native_flock" -> nativeDemo(context, IpcNativeBridge.KIND_FLOCK, workPath(context, "demo.lock"))
             else -> DemoResult.Failure("未知演示 id: $id")
         }
     } catch (t: Throwable) {

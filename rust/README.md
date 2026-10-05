@@ -73,6 +73,11 @@ cargo build --manifest-path rust/android/Cargo.toml --target aarch64-linux-andro
 - 后果是有意的：单次 fetch 的并发度受 net 泳道 core 数约束，而不是另起一套无治理的并发。
 - 取消是**协作式**的：`block_on` 内每 50ms 轮询取消标志，命中即丢弃整个 future。
   它不是硬中断，不能打断底层 socket syscall —— 该缺口在 `h3.rs` 与 `NOTES-netlab.md` 里明确标注。
+- **取消标志由谁置**（M3）：OkHttp **没有** public 的 onCancel 回调，故
+  `RustTransportInterceptor` 起一个**只轮询内存布尔**的短命看门狗线程（`rust-cancel-bridge`，
+  daemon，请求结束即中断退出），把 `Call.isCanceled()` 桥接到 Rust 标志。
+  它不是 IO / 不是计算，故不纳入 `ThreadPools` 泳道配额；这一点在此**显式登记**，
+  以免日后线程快照里出现它时被误判为「漏治理」。
 
 > 未做（若要做需再登记一次）：QUIC **连接复用**需要长驻 runtime，届时应由**单条**在
 > `ThreadPools` 登记过的任务驱动，而不是让 runtime 自己起线程。

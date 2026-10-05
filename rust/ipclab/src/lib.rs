@@ -9,6 +9,7 @@
 //! ─── 模块划分 ───
 //!
 //! - [`sys`]：原始 syscall 包装，统一把失败翻译成 `Err(-errno)`，零业务逻辑。
+//! - [`pipe`]：匿名管道 `pipe2` 与命名管道 FIFO 的演示。
 //! - [`stream`]：AF_UNIX（abstract / filesystem）字节流演示。
 //! - [`demo`]：按名字分发到具体演示，供 JNI 层调用。
 //!
@@ -27,6 +28,8 @@
 
 pub mod demo;
 #[cfg(ipc_linux)]
+pub mod pipe;
+#[cfg(ipc_linux)]
 pub mod stream;
 #[cfg(ipc_linux)]
 pub mod sys;
@@ -42,7 +45,7 @@ pub const LOG_TAG: &str = "IpcLabNative";
 /// 稳定 ABI 版本号。Kotlin 侧加载后比对，不匹配即显式降级，绝不用错布局静默算错。
 ///
 /// 变更记录：
-///   1 → 初版：AF_UNIX（abstract / filesystem）字节流
+///   1 → 初版：AF_UNIX（abstract / filesystem）字节流、匿名管道 / FIFO
 pub const ABI_VERSION: i32 = 1;
 
 #[cfg(ipc_linux)]

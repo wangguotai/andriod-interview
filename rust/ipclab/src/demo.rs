@@ -11,18 +11,20 @@
 //!     - 第 3 项：整段日志（含 `[tag]` 前缀），上层原样上屏。
 //! - 不在 Kotlin 侧二次拼接日志 —— 证据的可信度来自「它就是 native 打出来的原文」。
 //!
-//! 本文件随里程碑逐步生长：M1 引入 AF_UNIX（abstract / filesystem）自测与服务端。
+//! 本文件随里程碑逐步生长：M2 追加匿名管道 / FIFO。
 
 /// 按名字分发到具体演示。名字与 Kotlin 侧 `IpcNativeDemo` 的枚举一一对应。
 ///
-/// - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）
-/// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字
+/// - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）/ `pipe` / `fifo`
+/// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字；`fifo` 传可写目录下的路径
 #[cfg(ipc_linux)]
 pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
     // 先把 SIGPIPE 设为忽略（dlopen 进来的 cdylib 不会自动做这件事），
-    // 否则「向已断开的 socket 写」会直接杀掉 App 进程而不是回 EPIPE。
+    // 否则「向已关闭的 pipe 写」会直接杀掉 App 进程而不是回 EPIPE。
     crate::ensure_init();
     match kind {
+        "pipe" => (true, true, crate::pipe::pipe_demo()),
+        "fifo" => (true, true, crate::pipe::fifo_demo(arg)),
         "unix" => (true, true, crate::stream::unix_socket_selftest(arg)),
         "unix_serve" => {
             // arg = abstract 名字；服务一条 Java LocalSocket 连接（默认 5s 超时）。
@@ -55,7 +57,7 @@ pub fn run(kind: &str, _arg: &str) -> (bool, bool, String) {
 /// 支持的演示类型列表（供 Kotlin 侧做能力探测 / 展示）。
 #[cfg(ipc_linux)]
 pub fn supported() -> Vec<&'static str> {
-    vec!["unix", "unix_serve"]
+    vec!["pipe", "fifo", "unix", "unix_serve"]
 }
 
 #[cfg(not(ipc_linux))]
@@ -78,6 +80,6 @@ mod tests {
     #[cfg(ipc_linux)]
     #[test]
     fn supported_lists_all() {
-        assert_eq!(supported().len(), 2);
+        assert_eq!(supported().len(), 4);
     }
 }

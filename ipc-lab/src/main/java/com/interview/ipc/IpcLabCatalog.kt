@@ -8,7 +8,7 @@ package com.interview.ipc
  * 新增一个演示 = 在 [DEMOS] 里加一条 + 在 [IpcDemoRunner] 里注册实现。
  * 首页与汇总页都只读这里，不硬编码任何演示。
  *
- * 本文件随里程碑逐步生长：M1 登记 AF_UNIX（abstract/filesystem）+ TCP loopback。
+ * 本文件随里程碑逐步生长：M2 追加匿名管道 / FIFO。
  */
 object IpcLabCatalog {
 
@@ -34,6 +34,22 @@ object IpcLabCatalog {
             subtitle = "127.0.0.1 上的 TCP 连接：印证「socket 不一定是跨机的」，并对照 AF_UNIX",
             layer = IpcLayer.FRAMEWORK,
             model = IpcModel.BYTE_STREAM,
+        ),
+
+        // ───────────── Linux 原生：管道 ─────────────
+        IpcDemo(
+            id = "native_pipe",
+            title = "匿名管道 pipe (Rust)",
+            subtitle = "pipe2 一对 fd、原子写、EOF、EPIPE：字节流没有消息边界的实证",
+            layer = IpcLayer.LINUX,
+            model = IpcModel.PIPE,
+        ),
+        IpcDemo(
+            id = "native_fifo",
+            title = "命名管道 FIFO (Rust)",
+            subtitle = "mkfifo + 阻塞/非阻塞打开语义：无读者时 O_WRONLY|O_NONBLOCK 回 ENXIO",
+            layer = IpcLayer.LINUX,
+            model = IpcModel.PIPE,
         ),
     )
 

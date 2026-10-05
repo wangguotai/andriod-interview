@@ -44,24 +44,27 @@ import java.util.concurrent.atomic.AtomicLong
  * 定值问题不是「最多能开多少」，而是：
  *   在排队延迟（P99）不劣化的前提下，让下游资源恰好跑满的**最小**并发。
  *
- *  net = 4 / 8
+ *  net = 8 / 8   （**已实测修正**，原 4 / 8）
  *    ① RTT 受限的小请求：吞吐 λ = n / (RTT + S/B)，W 几乎不随 n 变化，
- *       所以 n=1→4 是**线性收益**（100ms RTT 的接口，4 并发把 4 次串行的
+ *       所以加并发是**线性收益**（100ms RTT 的接口，4 并发把 4 次串行的
  *       400ms 压到 ~100ms）。「加并发只是均分带宽」只对**带宽受限**的大文件
- *       传输成立 —— 它给的是**上界**，给不出 4 这个值。
- *    ② 上界由三件事压下来：per-host 连接池（OkHttp 默认 maxIdleConnections=5，
- *       HTTP/1.1 下超出连接数的请求只能串行）、服务端风控（单 host 并发过高
- *       会被 CDN/WAF 判异常）、每线程栈开销（泳道是跨域名的**全局**并发）。
- *    ③ 射频 race-to-sleep：传输结束后射频不立刻回 IDLE，RRC inactivity 的
- *       tail 是**秒级**高功耗窗口。但 tail 的**次数**取决于「请求间隔 vs
- *       timer」，不取决于并行度 —— 并行只是把窗口从 Σw 缩到 max(w)。
- *       真正治 tail 的是 **batching**（攒起来一次打完），不是加并发。
- *    ④ 「对齐 OkHttp maxRequestsPerHost=5」是**惯例**，不是移动端推论，
- *       而且它是 **per-host** 的。取 4 属于同量级对齐，别包装成推导。
+ *       传输成立 —— 它给的是**上界**，给不出具体值。
+ *    ② 原来的 4 是「与 OkHttp maxRequestsPerHost=5 同量级对齐」的**惯例值**，
+ *       不是推导。实测发现它在真实突发量级下就排队：RTT≈100ms 的替身负载，
+ *       λ=60 QPS 时 P99 等待 167ms，而 core=8 仅 2ms（详见 NET_CORE 注释）。
+ *       定值改用 Little's Law：`core ≥ λ_peak × W_p99`。
+ *    ③ 上界仍由三件事压下来：per-host 连接池、服务端风控、每线程栈开销。
+ *       ⚠️ 但 [com.interview.net.NetConfig.maxRequestsPerHost]=5 只约束
+ *       `enqueue()`；同步 `execute()` 绕过 Dispatcher，那条上限不生效。
+ *    ④ 射频 race-to-sleep：真正治 RRC tail 的是 **batching**，不是加并发。
  *
- *    ⚠️ 泳道并发 4 ≠ 网络并发 4。net 泳道的 4 个线程把请求交给 OkHttp，
+ *    ⚠️ 泳道并发 ≠ 网络并发。net 泳道的线程把请求交给 OkHttp，
  *       OkHttp 自己还有 Dispatcher（maxRequests=64 / maxRequestsPerHost=5）
  *       与连接池。两层是**叠乘**关系，不是同一层。
+ *
+ *    ⚠️ 「core=8」只解决**应用层排队**，不解决下游。若瓶颈在服务端或带宽，
+ *       加线程只会让请求在 OkHttp 连接池里继续排队 —— 这时该做的是限流与
+ *       batching，不是继续加大 core。
  *
  *  disk = 2 / 4
  *    ① 旧注释写「UFS/eMMC 队列深度低」**不准确** —— 它把两种相反的形态并列了：
@@ -86,15 +89,23 @@ import java.util.concurrent.atomic.AtomicLong
  *   硬（前提成立）eMMC 4.4/4.5 无有效并行提交
  *   惯例          OkHttp maxRequestsPerHost=5（且是 per-host）
  *   ❌ 与事实相反  「UFS 队列深度低」
- *   待实测        core=4/2、max=8/4 的具体取值
+ *   已实测        net 泳道 core（4 → 8，见 NET_CORE 注释的到达率扫描）
+ *   待实测        disk/bg 的 core；「分位数」需真实链路，非 sleep 替身
  *
- * ─── 队列容量与 max 的关系（本轮修正）───
+ * ─── 队列容量与 max 的关系（修正 1 → 修正 2）───
  * ThreadPoolExecutor 的语义是「先填 core → 再入队 → 队列满才扩到 max」。
- * 旧配置 queueCapacity=32 时，net 要扩到 8 需已在途 4+32=36 个任务 ——
- * 那时 waitP99 早已爆掉，max 只在**过载区**生效。这与「修正 1：让扩容条件
- * 真正可达」自相矛盾（只是从「永不可达」变成「可达但无意义」）。
- * 故把队列收窄到与 max 匹配：net 8 / disk 4 / db 16 / bg 32，
- * 语义变成「稳态 core，超载借 max 并更早背压」。
+ *
+ * 修正 1（消歧义）：旧配置 queueCapacity=32 时，net 要扩到 8 需已在途
+ * 4+32=36 个任务，那时 waitP99 早已爆掉。故收窄队列，让扩容「可达」。
+ *
+ * 修正 2（实测后推翻修正 1 的思路）：收窄队列后实测扩容阶梯，发现即便
+ * net=8 / queue=8，**也要先积压满 8 个任务**（poolSize 恒为 4 直到提交#13）
+ * 才开始扩容。即 max>core 在**常态区根本用不上**，只制造「以为有 8 条通道、
+ * 实际只有 4 条」的错觉。结论：对延迟敏感的泳道，**直接 core=max**，
+ * 把有界队列当突发缓冲（而非扩容触发器），饱和即背压更诚实。
+ * 本轮据此把 **net 改为 8/8**。disk(2/4)、db(1/1)、bg(1/2) 是否同样收敛，
+ * 待各自用并发扫描标定后再动 —— 它们受下游资源约束，不能照搬 net 的结论。
+ * 队列容量只决定「能吸收多少突发」，不再承担「何时扩容」的语义。
  *
  * 精确值应由**并发扫描实测**标定（见 [LaneCalibration]）：扫 core=1..16，
  * 取「吞吐曲线平台起点」与「waitP99 触及 SLO 的交点」中**较小者**。
@@ -297,12 +308,48 @@ object ThreadPools {
     // 四条泳道：执行隔离，互不拖累
     // ─────────────────────────────────────────────
 
+    /**
+     * net 泳道并发。不随核数缩放 —— net 是 RTT 受限（线程都在 epoll 上等），
+     * 瓶颈在下游带宽/服务端，不在设备 CPU。
+     *
+     * ─── 旧值 core=4 的问题（已在 emulator-5554 / API 36 实测证实）───
+     *
+     * `ThreadPoolExecutor` 的扩容规则是**先排队、后扩容**：只有队列满时才把
+     * 线程数从 core 往 max 扩。旧配置 core=4 / queue=8 / max=8，实测：
+     *
+     *     提交#5~#12 → poolSize 恒为 4，队列 1→8
+     *     提交#13    → poolSize 才变 5     ← 先积压 8 个任务才开始扩容
+     *
+     * 也就是 `max=8` 在队列未满时**永不生效**，只制造「以为有 8 条通道、
+     * 实际只有 4 条」的错觉。
+     *
+     * 到达率扫描（RTT≈100ms 的替身负载，模拟 RTT 受限请求）实测 P99 等待：
+     *
+     *     λ(QPS)   core=4      core=8
+     *       20      42ms        3ms
+     *       40      36ms        2ms
+     *       60     167ms        2ms   ← 旧配置在真实突发量级下开始排队爆炸
+     *       80    150ms(拒7)   31ms
+     *
+     * 定值依据：Little's Law `L = λ × W`，稳态需 `core ≥ λ_peak × W_p99`。
+     * 移动端突发（十几张图 + 若干 API）在 W≈0.3s 时对应 λ≈40~60 QPS，故取 8。
+     *
+     * ⚠️ 上界：并发不该超过下游对单 host 的容忍度（服务端风控 / 连接争抢）。
+     *   本仓库 [com.interview.net.NetConfig.maxRequestsPerHost]=5，但**同步
+     *   `execute()` 会绕过 OkHttp Dispatcher**，那条上限并不生效。所以 8 是
+     *   「单 host 场景的折中」；下游若对单 host 收紧，应下调此值，或改用
+     *   `enqueue()` 让 Dispatcher 接管 per-host 限流。
+     */
+    private const val NET_CORE = 8
+
     /** 网络：RTT 受限下并发有线性收益，上界由 per-host 连接池与风控压住 */
     val network: Lane by lazy {
         Lane(
-            name = "net", coreSize = 4, maxSize = 8, keepAliveSeconds = 60,
-            // 队列与 max 匹配：core 4 填满后，再有 8 个待处理就扩到 max=8；
-            // 取 32 会让扩容要等到在途 36，max 形同虚设（详见类注释）
+            name = "net", coreSize = NET_CORE, maxSize = NET_CORE, keepAliveSeconds = 60,
+            // core==max：固定大小池 + 有界队列当突发缓冲。
+            // 不再让 max>core —— 队列未满时永远不扩容，那个 max 只会误导
+            //（见 NET_CORE 注释的实测阶梯）。队列 8 用于吸收突发，
+            // 再满即背压（AbortPolicy → 调用方显式降级）。
             queueCapacity = 8, androidPriority = Process.THREAD_PRIORITY_BACKGROUND, quotaPerCaller = 16,
         )
     }

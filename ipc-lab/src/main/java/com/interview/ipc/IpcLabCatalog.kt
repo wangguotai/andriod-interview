@@ -8,7 +8,7 @@ package com.interview.ipc
  * 新增一个演示 = 在 [DEMOS] 里加一条 + 在 [IpcDemoRunner] 里注册实现。
  * 首页与汇总页都只读这里，不硬编码任何演示。
  *
- * 本文件随里程碑逐步生长：M2 追加匿名管道 / FIFO。
+ * 本文件随里程碑逐步生长：M3 追加 POSIX 信号。
  */
 object IpcLabCatalog {
 
@@ -50,6 +50,13 @@ object IpcLabCatalog {
             subtitle = "mkfifo + 阻塞/非阻塞打开语义：无读者时 O_WRONLY|O_NONBLOCK 回 ENXIO",
             layer = IpcLayer.LINUX,
             model = IpcModel.PIPE,
+        ),
+        IpcDemo(
+            id = "native_signal",
+            title = "POSIX 信号 (Rust)",
+            subtitle = "sigaction + SA_SIGINFO 读 si_pid、实时信号不合并、sigsuspend 消除竞态",
+            layer = IpcLayer.LINUX,
+            model = IpcModel.SIGNAL,
         ),
     )
 

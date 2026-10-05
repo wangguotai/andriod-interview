@@ -11,11 +11,9 @@
 //!     - 第 3 项：整段日志（含 `[tag]` 前缀），上层原样上屏。
 //! - 不在 Kotlin 侧二次拼接日志 —— 证据的可信度来自「它就是 native 打出来的原文」。
 //!
-//! 本文件随里程碑逐步生长：M2 追加匿名管道 / FIFO。
-
-/// 按名字分发到具体演示。名字与 Kotlin 侧 `IpcNativeDemo` 的枚举一一对应。
-///
-/// - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）/ `pipe` / `fifo`
+//! 本文件随里程碑逐步生长：M3 追加 POSIX 信号。
+//!
+//! - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）/ `pipe` / `fifo` / `signal`
 /// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字；`fifo` 传可写目录下的路径
 #[cfg(ipc_linux)]
 pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
@@ -25,6 +23,7 @@ pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
     match kind {
         "pipe" => (true, true, crate::pipe::pipe_demo()),
         "fifo" => (true, true, crate::pipe::fifo_demo(arg)),
+        "signal" => (true, true, crate::signal::signal_demo()),
         "unix" => (true, true, crate::stream::unix_socket_selftest(arg)),
         "unix_serve" => {
             // arg = abstract 名字；服务一条 Java LocalSocket 连接（默认 5s 超时）。
@@ -57,7 +56,7 @@ pub fn run(kind: &str, _arg: &str) -> (bool, bool, String) {
 /// 支持的演示类型列表（供 Kotlin 侧做能力探测 / 展示）。
 #[cfg(ipc_linux)]
 pub fn supported() -> Vec<&'static str> {
-    vec!["pipe", "fifo", "unix", "unix_serve"]
+    vec!["pipe", "fifo", "signal", "unix", "unix_serve"]
 }
 
 #[cfg(not(ipc_linux))]
@@ -80,6 +79,6 @@ mod tests {
     #[cfg(ipc_linux)]
     #[test]
     fn supported_lists_all() {
-        assert_eq!(supported().len(), 4);
+        assert_eq!(supported().len(), 5);
     }
 }

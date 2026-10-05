@@ -54,6 +54,8 @@ import java.io.IOException
  *   属于如实标注的近似，而非假装精确。
  * @param levelProvider 取当前网络档位（注入以便单测；生产传 [NetClient.networkQuality] 的结果）
  * @param hasProxyProvider 判断某 URL 是否会被代理（注入以便单测；默认用系统代理选择器）
+ * @param pinProvider 返回某 host 的 SPKI 固定（`null` host = 全局）。默认空 = 不 pin
+ *   （**仍做完整链校验**）。见 DESIGN §6：漏掉 pin 等于相对 OkHttp 静默降级。
  * @param onMainThreadProvider 判断是否主线程（注入以避免本类依赖 Android Looper，便于单测）
  * @param metricsSink 记录度量（注入以便单测断言「恰好记一次」）
  */
@@ -63,7 +65,8 @@ class RustTransportInterceptor(
     private val callTimeoutMillis: Long = NetConfig.DEFAULT.baseCallTimeoutMillis,
     private val levelProvider: () -> NetworkLevel = { NetClient.networkQuality().level },
     private val hasProxyProvider: (okhttp3.HttpUrl) -> Boolean = ::systemProxyApplies,
-    private val onMainThreadProvider: () -> Boolean = { isMainThread() },
+    private val pinProvider: (String) -> List<Pair<String?, ByteArray>> = { emptyList() },
+    private val onMainThreadProvider: () -> Boolean = { isOnMainThread() },
     private val metricsSink: (NetMetrics.Record) -> Unit = { NetMetrics.record(it) },
 ) : Interceptor {
 
@@ -79,6 +82,7 @@ class RustTransportInterceptor(
             body: ByteArray?,
             timeoutMillis: Long,
             cancelHandle: NetLabBridge.CancelTokenHandle?,
+            pins: List<Pair<String?, ByteArray>>,
         ): NetLabBridge.FetchResult
     }
 
@@ -103,11 +107,35 @@ class RustTransportInterceptor(
         return try {
             val native = fetchViaRust(chain, request)
             buildSynthesizedResponse(request, native)
-        } catch (e: IOException) {
-            // 真失败：**不吞**。抛出后由 OkHttp 的既有失败链处理（前面拦截器可重试）。
-            Log.w(TAG, "Rust 传输失败，异常上抛交由既有链路处理：${e.message}")
+        } catch (e: RustTransportException) {
+            // ── 运行期回退（设计 A §8 验收 1）──
+            // 只有「传输已开始但失败」才走到这里；是否回退由 shouldFallback 裁决。
+            if (shouldFallback(e, request)) {
+                Log.w(
+                    TAG,
+                    "Rust 传输失败，回退 OkHttp 重试：${e.message} (${request.method} ${request.url})",
+                )
+                return chain.proceed(request)
+            }
+            Log.w(TAG, "Rust 传输失败且不可回退，上抛：${e.message}")
             throw e
         }
+    }
+
+    /**
+     * 回退裁决。**三条排除项每一条都有安全/语义理由，不是可调的偏好**：
+     *   · 关闭了回退开关 → 不回退；
+     *   · pin 不匹配 → **绝不回退**：它是安全事件（可能正被中间人），
+     *     回退等于换个通道再试一次，把告警掩盖成一次「网络抖动」；
+     *   · 取消 → 不回退：用户已主动放弃，重发违背其意图、也白耗流量；
+     *   · 非幂等方法 → 不回退：重发可能造成重复写入（与 [AdaptiveRetryInterceptor]
+     *     的幂等判定同一套语义）。
+     */
+    private fun shouldFallback(e: RustTransportException, request: Request): Boolean = when {
+        !config.fallbackOnFailure -> false
+        e.isPinMismatch -> false
+        e.isCancelled -> false
+        else -> request.method.uppercase() in FALLBACK_SAFE_METHODS
     }
 
     // ─────────────────────────────────────────
@@ -117,54 +145,89 @@ class RustTransportInterceptor(
     private fun fetchViaRust(chain: Interceptor.Chain, request: Request): NetLabBridge.NativeResponse {
         val call = chain.call()
 
-        // 取消桥接：OkHttp 的取消状态 → Rust 取消标志。
-        // OkHttp 的 cancel 可能在另一个线程发生，故用轮询式桥（见下 fetch 后的检查）。
-        val token = bridge.let { NetLabBridge.newToken() }
+        // ── 取消桥接：OkHttp 的取消状态 → Rust 取消标志 ──
+        // OkHttp **没有** public 的 "onCancel" 回调，取消由任意线程调用 `Call.cancel()` 触发。
+        // 因此必须在旁路起一个**看门狗**把状态转出去，否则 native 侧每 50ms 查的取消标志
+        // 永远是 false（= 取消只会在 fetch 返回后才被复查到，飞行中根本停不下来）。
+        //
+        // ⚠️ 这不是「自建线程做 IO」：它不发任何网络请求、只轮询一个内存布尔，
+        // 因此不绕开泳道治理（真正阻塞的 fetch 仍在 net 泳道线程上）。
+        val token = NetLabBridge.newToken()
+        val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        val watchdog = if (token != null) {
+            Thread({
+                try {
+                    while (!done.get()) {
+                        if (call.isCanceled()) {
+                            token.cancel()
+                            return@Thread
+                        }
+                        Thread.sleep(CANCEL_POLL_MILLIS)
+                    }
+                } catch (_: InterruptedException) {
+                    // 正常收尾：fetch 已返回并置 done，线程被中断退出。
+                }
+            }, "rust-cancel-bridge").apply { isDaemon = true; start() }
+        } else {
+            null
+        }
+
         try {
             // 请求体：第一版只支持「已完整读入内存」的小 body（上限由路由判定把关）。
             val bodyBytes = request.body?.let { rb ->
                 Buffer().also { rb.writeTo(it) }.readByteArray()
             }
 
-            val timeout = callTimeoutMillis
-
             val result = bridge.fetch(
                 url = request.url.toString(),
                 method = request.method,
                 headers = request.headers.toMultimap().flatMap { (k, vs) -> vs.map { k to it } },
                 body = bodyBytes,
-                timeoutMillis = timeout,
+                timeoutMillis = callTimeoutMillis,
                 cancelHandle = token,
+                // 证书固定：经 JNI 传入 TlsConfig（安全红线，见 DESIGN §6）。
+                pins = pinProvider(request.url.host),
             )
 
             // 协作式取消的「返回后复查」：native 在阶段边界查标志，这里再查一次
             // OkHttp 侧是否已取消，避免把「用户已放弃」的结果当成成功返回。
             if (call.isCanceled()) {
-                throw IOException("Call 已被取消（Rust 传输返回后复查）")
+                throw RustTransportException(
+                    message = "Call 已被取消（Rust 传输返回后复查）",
+                    isPinMismatch = false,
+                    isCancelled = true,
+                )
             }
 
             return when (result) {
                 is NetLabBridge.FetchResult.Success -> result.response
-                is NetLabBridge.FetchResult.Failure -> throw mapFailure(result, request)
+                is NetLabBridge.FetchResult.Failure -> throw RustTransportException(
+                    message = describeFailure(result, request),
+                    isPinMismatch = result.isPinMismatch,
+                    isCancelled = result.isCancelled,
+                )
             }
         } finally {
-            token?.close() // 恰好释放一次（AutoCloseable）
+            done.set(true)
+            watchdog?.interrupt() // 让它立刻退出，不空转到下一个轮询周期
+            token?.close()        // 恰好释放一次（AutoCloseable）
         }
     }
 
     /**
-     * 把 Rust 失败映射成 [IOException]，**按语义分类**而不是一律「网络错误」：
-     *   · pin 不匹配 → 带上明确字样，绝不能被上层当作「网络抖动」静默重试；
-     *   · 取消        → 也是 IOException，但语义是「用户主动放弃」；
-     *   · 其它        → 普通 IO 失败，可被 [AdaptiveRetryInterceptor] 按幂等规则重试。
+     * 把 Rust 失败翻译成人可读、且**按语义分类**的信息。
+     *
+     * 分类保留在异常对象上而不是只写进字符串：调用方（[shouldFallback]）要按
+     * 「是不是安全事件 / 是不是取消」做**决策**，靠匹配字符串太脆
+     * （文案一改，回退策略就悄悄变了）。
      */
-    private fun mapFailure(f: NetLabBridge.FetchResult.Failure, request: Request): IOException {
+    private fun describeFailure(f: NetLabBridge.FetchResult.Failure, request: Request): String {
         val prefix = when {
-            f.isPinMismatch -> "证书固定校验失败（安全事件，不可重试）"
+            f.isPinMismatch -> "证书固定校验失败（安全事件，不可回退/重试）"
             f.isCancelled -> "Rust 传输被取消"
             else -> "Rust HTTP/3 传输失败"
         }
-        return IOException("$prefix: code=${f.code} ${f.message} [${request.method} ${request.url}]")
+        return "$prefix: code=${f.code} ${f.message} [${request.method} ${request.url}]"
     }
 
     // ─────────────────────────────────────────
@@ -263,6 +326,21 @@ class RustTransportInterceptor(
         private const val TAG = "RustTransport"
 
         /**
+         * 取消看门狗的轮询周期（毫秒）。
+         *
+         * 为什么不是 0（忙等）：看门狗在请求**全程**活着，忙等会白烧一个核；
+         * 50ms 与 Rust 侧检查取消标志的粒度一致（见 `h3::fetch` 的 `cancel_after`），
+         * 两侧同频即可，再快也换不来更早的停止。
+         */
+        private const val CANCEL_POLL_MILLIS = 50L
+
+        /**
+         * 允许**运行期回退**的方法：与 [AdaptiveRetryInterceptor] 的幂等语义同一套。
+         * 非幂等方法失败后不替调用方重发 —— 那是会重复写入的决定，不该由传输层代做。
+         */
+        private val FALLBACK_SAFE_METHODS = setOf("GET", "HEAD", "PUT", "DELETE")
+
+        /**
          * 某 URL 是否会经系统代理。
          *
          * ⚠️ 不能只判「proxySelector 非 null」：OkHttp 总会有一个（默认的系统选择器），
@@ -278,19 +356,21 @@ class RustTransportInterceptor(
                 ?.any { it != java.net.Proxy.NO_PROXY }
                 ?: false
         }.getOrDefault(false)
-
-        /**
-         * 是否主线程。用 `Looper.getMainLooper()` 判断，不引 Android 类型到构造签名里
-         * （实际仍依赖 android.os.Looper，但被 [onMainThreadProvider] 的默认值隔离，
-         * 单测注入替身后即可在 JVM 上跑）。
-         */
-        private fun isMainThread(): Boolean = try {
-            android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
-        } catch (_: Throwable) {
-            false
-        }
     }
 }
+
+/**
+ * Rust 传输失败的结构化异常。
+ *
+ * 为什么不用裸 [IOException] + 匹配字符串：**回退策略要依据失败类型做决策**
+ * （pin 失败与取消都不得回退），靠字符串匹配太脆，文案一改策略就悄悄变了。
+ * 分类作为字段显式携带，回退裁决才能是「读代码就能确认」的。
+ */
+internal class RustTransportException(
+    message: String,
+    val isPinMismatch: Boolean,
+    val isCancelled: Boolean,
+) : IOException(message)
 
 /** 生产用默认实现：转发到 [NetLabBridge]。抽成对象便于单测替换。 */
 internal object NetLabBridgeFetch : RustTransportInterceptor.RustFetch {
@@ -301,6 +381,7 @@ internal object NetLabBridgeFetch : RustTransportInterceptor.RustFetch {
         body: ByteArray?,
         timeoutMillis: Long,
         cancelHandle: NetLabBridge.CancelTokenHandle?,
+        pins: List<Pair<String?, ByteArray>>,
     ): NetLabBridge.FetchResult =
-        NetLabBridge.fetch(url, method, headers, body, timeoutMillis, cancelHandle)
+        NetLabBridge.fetch(url, method, headers, body, timeoutMillis, cancelHandle, pins)
 }

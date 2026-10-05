@@ -34,8 +34,8 @@ pub mod wire;
 ///   1 → M1：abiVersion / versionString / validateRequest / CancelToken / timing / wire
 ///   2 → M2：新增 h3 模块（真实 HTTP/3 fetch）+ 线格式 headers 改为有序可重复
 ///           （否则 Set-Cookie 会被静默覆盖）并新增 spki 字段。
-///           **线格式变更 ⇒ 版本必须 +1**，与 netlab_android::ABI_VERSION 同步。
-pub const ABI_VERSION: i32 = 2;
+///   3 → M3：h3 fetch 支持证书固定（SPKI pin）配置 + 运行期回退所需的错误区分。
+pub const ABI_VERSION: i32 = 3;
 
 /// 本 crate 的版本字符串，供 Kotlin 侧 diagnostics 展示。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn abi_and_version_are_stable() {
-        assert_eq!(ABI_VERSION, 2, "ABI 版本变更必须同步 Kotlin 侧 EXPECTED_ABI_VERSION");
+        assert_eq!(ABI_VERSION, 3, "ABI 版本变更必须同步 Kotlin 侧 EXPECTED_ABI_VERSION");
         assert!(!VERSION.is_empty());
         assert_eq!(LOG_TAG, "NetLabNative");
     }

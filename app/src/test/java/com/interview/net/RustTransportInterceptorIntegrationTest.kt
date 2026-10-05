@@ -77,12 +77,13 @@ class RustTransportInterceptorIntegrationTest {
         server.shutdown()
     }
 
-    /** 可编程的假 Rust 桥：不发网络请求，返回预设结果，并记录调用次数。 */
+    /** 可编程的假 Rust 桥：不发网络请求，返回预设结果，并记录调用次数与收到的 pin。 */
     private class FakeRustBridge(
         private val produce: (String) -> NetLabBridge.FetchResult,
     ) : RustTransportInterceptor.RustFetch {
         val calls = AtomicInteger(0)
         val seenUrls = mutableListOf<String>()
+        val seenPins = mutableListOf<List<Pair<String?, ByteArray>>>()
         override fun fetch(
             url: String,
             method: String,
@@ -90,9 +91,11 @@ class RustTransportInterceptorIntegrationTest {
             body: ByteArray?,
             timeoutMillis: Long,
             cancelHandle: NetLabBridge.CancelTokenHandle?,
+            pins: List<Pair<String?, ByteArray>>,
         ): NetLabBridge.FetchResult {
             calls.incrementAndGet()
             seenUrls += url
+            seenPins += pins
             return produce(url)
         }
     }
@@ -123,8 +126,16 @@ class RustTransportInterceptorIntegrationTest {
         bridge: RustTransportInterceptor.RustFetch,
         recorded: MutableList<NetMetrics.Record>,
         level: NetworkLevel = NetworkLevel.WEAK,
+        pins: (String) -> List<Pair<String?, ByteArray>> = { emptyList() },
+        fallbackOnFailure: Boolean = true,
+        config: RustTransportConfig? = null,
     ): OkHttpClient {
-        val (cfg, lvl) = rustConfig(level = level)
+        val cfg = config ?: RustTransportConfig(
+            enabled = true,
+            hostAllowlist = setOf(host),
+            triggerLevels = setOf(NetworkLevel.WEAK),
+            fallbackOnFailure = fallbackOnFailure,
+        )
         return OkHttpClient.Builder()
             .sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
             .eventListenerFactory(NetEventListener.Factory())
@@ -134,8 +145,9 @@ class RustTransportInterceptorIntegrationTest {
                     bridge = bridge,
                     config = cfg,
                     callTimeoutMillis = 5_000,
-                    levelProvider = { lvl },
+                    levelProvider = { level },
                     hasProxyProvider = { false },
+                    pinProvider = pins,
                     onMainThreadProvider = { false },
                     metricsSink = { recorded += it },
                 )
@@ -197,7 +209,7 @@ class RustTransportInterceptorIntegrationTest {
      */
     @Test
     fun `防双记护栏 —— 应用拦截器合成响应时 EventListener 不得再记一条`() {
-        val (cfg, lvl) = rustConfig()
+        val cfg = RustTransportConfig(enabled = true, hostAllowlist = setOf(host))
         val client = OkHttpClient.Builder()
             .sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
             .eventListenerFactory(NetEventListener.Factory())
@@ -205,7 +217,7 @@ class RustTransportInterceptorIntegrationTest {
                 RustTransportInterceptor(
                     bridge = FakeRustBridge { okResponse("rust") },
                     config = cfg,
-                    levelProvider = { lvl },
+                    levelProvider = { NetworkLevel.WEAK },
                     hasProxyProvider = { false },
                     onMainThreadProvider = { false },
                     // 这个测试**故意不**接 metricsSink：模拟「只有 EventListener 在记」
@@ -243,27 +255,49 @@ class RustTransportInterceptorIntegrationTest {
         assertEquals("应真的走了 OkHttp 网络层", 1, server.requestCount)
     }
 
+    // ─────────────────────────────────────────
+    // 运行期回退（设计 A §8 验收 1）
+    // ─────────────────────────────────────────
+
     @Test
-    fun `Rust 失败时抛 IOException，且失败链不额外记一条合成记录`() {
+    fun `Rust 失败且可回退时，交回 OkHttp 拿真实响应（回退可用）`() {
+        server.enqueue(MockResponse().setBody("okhttp-fallback").setResponseCode(200))
         val bridge = FakeRustBridge {
             NetLabBridge.FetchResult.Failure(code = 11, message = "connect: handshake failed")
         }
         val recorded = mutableListOf<NetMetrics.Record>()
 
-        var threw = false
-        try {
-            clientWith(bridge, recorded).newCall(request()).execute()
-        } catch (e: IOException) {
-            threw = true
-            assertTrue("失败信息应可诊断", e.message!!.contains("11"))
+        clientWith(bridge, recorded).newCall(request()).execute().use { resp ->
+            assertEquals(200, resp.code)
+            assertEquals("okhttp-fallback", resp.body?.string())
+            assertEquals("回退拿到的是真 OkHttp 响应，而非 Rust 合成", Protocol.HTTP_2, resp.protocol)
         }
-        assertTrue("Rust 失败必须上抛 IOException（交给既有失败链）", threw)
-        assertEquals("失败由 OkHttp 失败链处理，本拦截器不额外记一条", 0, recorded.size)
-        assertEquals("失败时也不应回退去发真实网络请求", 0, server.requestCount)
+        assertEquals("Rust 桥应先被调用一次", 1, bridge.calls.get())
+        assertEquals("并回退到 OkHttp 一次", 1, server.requestCount)
+        assertTrue(
+            "回退交给既有失败链，应由 EventListener 记账而非本拦截器自己合成一条",
+            recorded.isEmpty(),
+        )
     }
 
     @Test
-    fun `pin 不匹配的失败必须可识别为安全事件（不可当普通网络抖动重试）`() {
+    fun `关闭回退开关时 Rust 失败直接上抛，不偷偷回退`() {
+        val bridge = FakeRustBridge {
+            NetLabBridge.FetchResult.Failure(code = 11, message = "connect: failed")
+        }
+        val recorded = mutableListOf<NetMetrics.Record>()
+        var threw = false
+        try {
+            clientWith(bridge, recorded, fallbackOnFailure = false).newCall(request()).execute()
+        } catch (e: IOException) {
+            threw = true
+        }
+        assertTrue("关闭回退后必须上抛", threw)
+        assertEquals("不得偷偷回退去发请求", 0, server.requestCount)
+    }
+
+    @Test
+    fun `pin 不匹配绝不回退 —— 安全事件不得被回退掩盖成网络抖动`() {
         val bridge = FakeRustBridge {
             NetLabBridge.FetchResult.Failure(
                 code = 11,
@@ -271,25 +305,42 @@ class RustTransportInterceptorIntegrationTest {
             )
         }
         val recorded = mutableListOf<NetMetrics.Record>()
+        var threw = false
         try {
-            clientWith(bridge, recorded).newCall(request()).execute()
-            throw AssertionError("应抛出 IOException")
+            // 回退开关是开的，但 pin 失败仍不得回退。
+            clientWith(bridge, recorded, fallbackOnFailure = true).newCall(request()).execute()
         } catch (e: IOException) {
-            assertTrue(
-                "pin 失败必须带上明确字样，否则会被误当作网络抖动重试",
-                e.message!!.contains("安全事件"),
-            )
+            threw = true
+            assertTrue("必须带上安全事件字样", e.message!!.contains("安全事件"))
         }
+        assertTrue("pin 失败必须上抛", threw)
+        assertEquals("pin 失败绝不能回退（换通道再试会掩盖中间人告警）", 0, server.requestCount)
     }
 
     @Test
-    fun `未配 pin 的普通连接失败不得被误判为安全事件`() {
+    fun `取消不回退 —— 用户已放弃，重发违反其意图`() {
+        val bridge = FakeRustBridge {
+            NetLabBridge.FetchResult.Failure(code = 12, message = "cancelled")
+        }
+        val recorded = mutableListOf<NetMetrics.Record>()
+        var threw = false
+        try {
+            clientWith(bridge, recorded).newCall(request()).execute()
+        } catch (e: IOException) {
+            threw = true
+        }
+        assertTrue("取消应上抛", threw)
+        assertEquals("取消后不得回退重发", 0, server.requestCount)
+    }
+
+    @Test
+    fun `普通链校验失败不得被误判为安全事件`() {
         val bridge = FakeRustBridge {
             NetLabBridge.FetchResult.Failure(code = 11, message = "connect: handshake failed: 证书已过期")
         }
         val recorded = mutableListOf<NetMetrics.Record>()
         try {
-            clientWith(bridge, recorded).newCall(request()).execute()
+            clientWith(bridge, recorded, fallbackOnFailure = false).newCall(request()).execute()
             throw AssertionError("应抛出 IOException")
         } catch (e: IOException) {
             assertFalse(
@@ -297,6 +348,32 @@ class RustTransportInterceptorIntegrationTest {
                 e.message!!.contains("安全事件"),
             )
         }
+    }
+
+    // ─────────────────────────────────────────
+    // pin 配置通道（安全红线，见 DESIGN §6）
+    // ─────────────────────────────────────────
+
+    @Test
+    fun `pin 会经拦截器透传到 Rust 桥，且带 host 作用域`() {
+        val bridge = FakeRustBridge { okResponse("x") }
+        val recorded = mutableListOf<NetMetrics.Record>()
+        val spki = ByteArray(32) { 0xAB.toByte() }
+
+        clientWith(bridge, recorded, pins = { h -> listOf(h to spki) })
+            .newCall(request()).execute().use { assertEquals(200, it.code) }
+
+        val got = bridge.seenPins.single()
+        assertEquals("pin 必须带 host 作用域", host, got.single().first)
+        assertTrue("pin 内容应原样透传", got.single().second.contentEquals(spki))
+    }
+
+    @Test
+    fun `未配置 pin 时透传空列表（= 只做链校验，不是不校验）`() {
+        val bridge = FakeRustBridge { okResponse("x") }
+        val recorded = mutableListOf<NetMetrics.Record>()
+        clientWith(bridge, recorded).newCall(request()).execute()
+        assertTrue("默认不 pin，但 Rust 侧仍做完整链校验", bridge.seenPins.single().isEmpty())
     }
 
     @Test

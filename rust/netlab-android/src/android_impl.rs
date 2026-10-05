@@ -244,7 +244,7 @@ fn _keep_arc_import() -> Arc<CancelToken> {
 // fetch —— 真正的 QUIC/HTTP-3 传输（阻塞式，跑在调用方线程上）
 // ─────────────────────────────────────────
 
-/// `fetch(String url, String method, byte[] headers, byte[] body, long timeoutMs, long cancelHandle): byte[]`
+/// `fetch(String url, String method, byte[] headers, byte[] body, long timeoutMs, long cancelHandle, byte[] pins): byte[]`
 ///
 /// 阻塞式发起一次 HTTP/3 请求，返回[线格式](netlab::wire)字节；`null` 表示参数/内部错误。
 ///
@@ -255,13 +255,14 @@ fn _keep_arc_import() -> Arc<CancelToken> {
 ///
 /// ─── 取消 ───
 /// `cancel_handle` 是 `cancelTokenNew` 返回的句柄（可为 0 = 不取消）。
-/// 取消是**协作式**的：在阶段边界检查，无法硬中断正在进行的 socket 读
-/// （见 DESIGN §4.3，已知缺口）。因此这里额外在 fetch 返回后再查一次。
+/// 取消是**协作式**的：block_on 内每 50ms 轮询标志，命中即丢弃 future；
+/// 无法硬中断正在进行的 socket syscall（见 DESIGN §4.3，已知缺口）。
 ///
-/// ─── 安全 ───
-/// 无 pin 配置。v1 用 webpki-roots 做完整链校验；**证书固定（pinning）尚未接入
-/// 本符号**（h3.rs 已实现并有端到端验证，但把 pin 从 Java 传进来的通道是下一步）。
-/// 这条缺口必须显式说明，不能让它看起来「已经安全对齐了」。
+/// ─── 安全：证书固定（pinning）───
+/// `pins` 是行格式 `<host|*>\t<64位hex>\r\n`（见 `netlab::wire::parse_pin_lines`）。
+/// 非空时，rustls 在**完整链校验之后**再校验叶证书 SPKI-SHA256；
+/// 不匹配会被标记为 `SPKI-PIN-MISMATCH`，供上层识别为安全事件。
+/// 为 null/空 = 不做 pin（仍做完整链校验，**不是**不校验）。
 #[no_mangle]
 pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
     mut env: JNIEnv,
@@ -272,6 +273,7 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
     body: JByteArray,
     timeout_ms: jlong,
     cancel_handle: jlong,
+    pins: JByteArray,
 ) -> jni::sys::jbyteArray {
     use netlab::h3::{self, FetchRequest, TlsConfig};
 
@@ -281,14 +283,22 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
         let method = read_string(&mut env, &method)?;
         let header_bytes = if headers.is_null() { Vec::new() } else { env.convert_byte_array(&headers).ok()? };
         let body_bytes = if body.is_null() { None } else { Some(env.convert_byte_array(&body).ok()?) };
+        let pin_bytes = if pins.is_null() { Vec::new() } else { env.convert_byte_array(&pins).ok()? };
 
         // 取取消标志：句柄为 0 表示不取消。只借用，不取所有权。
-        // 用 Arc<CancelToken> 克隆出闭包捕获的句柄，保证句柄在 fetch 期间不被外部释放时悬垂。
+        // 克隆出 Arc 捕获进闭包，保证 fetch 期间句柄被外部释放也不会悬垂。
         let token: Option<CancelToken> = if cancel_handle == 0 {
             None
         } else {
             Some(unsafe { &*(cancel_handle as *const CancelToken) }.clone())
         };
+
+        // 解析 pin 行格式并记日志：被拒的行**必须可见**（安全配置写错不能静默）。
+        let (pin_list, rejected) = wire::parse_pin_lines(&pin_bytes);
+        if !rejected.is_empty() {
+            log_w(&mut env, &format!("{} 条 pin 格式非法、已忽略：{:?}", rejected.len(), rejected));
+        }
+        let tls = TlsConfig { pins: pin_list };
 
         let req = FetchRequest {
             url,
@@ -299,7 +309,7 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
             body: body_bytes,
         };
 
-        let result = h3::fetch(req, &TlsConfig::default(), move || {
+        let result = h3::fetch(req, &tls, move || {
             token.as_ref().is_some_and(|t| t.is_cancelled())
         });
 
@@ -320,7 +330,6 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
                     spki_sha256: leaf_spki,
                     headers: resp.headers,
                 };
-                // 编码失败（理论上 body_bytes 已对齐）→ 回传错误码而不是抛
                 wire::encode(&wire_resp, &resp.body)
                     .unwrap_or_else(|e| wire::encode_error(ERR_WIRE, &format!("{e:?}")))
             }
@@ -335,6 +344,27 @@ pub extern "system" fn Java_com_interview_net_nativebridge_NetLabNative_fetch(
         },
         _ => std::ptr::null_mut(),
     }
+}
+
+/// 通过 `android.util.Log.w` 打一条日志。
+///
+/// 为什么值得为它写代码：跨 FFI 的错误最难查，而**这里恰恰是「配置写错了但没人知道」
+/// 的高发区**（例如 pin 格式不对）。让被拒的配置出现在 logcat 里，比在文档里写
+/// 「请注意格式」有效得多。日志失败不影响主流程（整体 runCatching 吞掉）。
+#[cfg(target_os = "android")]
+fn log_w(env: &mut JNIEnv, msg: &str) {
+    let _ = (|| -> jni::errors::Result<()> {
+        let tag = env.new_string(LOG_TAG)?;
+        let text = env.new_string(msg)?;
+        let class = env.find_class("android/util/Log")?;
+        env.call_static_method(
+            class,
+            "w",
+            "(Ljava/lang/String;Ljava/lang/String;)I",
+            &[(&tag).into(), (&text).into()],
+        )?;
+        Ok(())
+    })();
 }
 
 /// 线编码失败的内部错误码（不应发生；发生即为实现 bug）。

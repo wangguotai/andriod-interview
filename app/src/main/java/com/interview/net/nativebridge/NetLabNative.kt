@@ -83,6 +83,8 @@ internal object NetLabNative {
      * @param headers 行格式 `Name: value\r\n`（见 Rust `wire::encode_header_lines`）
      * @param body    已完整读入内存的请求体；无 body 传 null
      * @param cancelHandle [cancelTokenNew] 返回的句柄；0 = 不取消
+     * @param pins    证书固定，行格式 `<host|*>\t<64位hex>\r\n`；null/空 = 不做 pin
+     *                （**仍做完整链校验**，不是不校验）。见 [NetLabBridge.encodePinLines]。
      */
     external fun fetch(
         url: String,
@@ -91,6 +93,7 @@ internal object NetLabNative {
         body: ByteArray?,
         timeoutMs: Long,
         cancelHandle: Long,
+        pins: ByteArray?,
     ): ByteArray?
 
     /**

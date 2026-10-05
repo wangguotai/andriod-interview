@@ -73,7 +73,10 @@ pub const ERR_PANIC: i32 = -2;
 ///   2 → M2：新增 **fetch**（真实 HTTP/3）+ spkiSha256Hex；
 ///           线格式 headers 由 map 改为**有序可重复**（否则 Set-Cookie 会被静默覆盖），
 ///           并新增 spki 字段。**格式变更 ⇒ ABI 必须 +1**，让旧 Kotlin 明确降级。
-pub const ABI_VERSION: i32 = 2;
+///   3 → M3：fetch 新增 `pins` 参数（证书固定的配置通道，安全红线）；
+///           仅 `fetch` 的**参数列表**变化，线格式未变。但 JNI 签名变更同样必须
+///           让旧 Kotlin 明确降级（否则会按旧签名调用 → 未定义行为），故 ABI +1。
+pub const ABI_VERSION: i32 = 3;
 
 /// 日志前缀，便于 logcat 过滤。
 pub const LOG_TAG: &str = netlab::LOG_TAG;

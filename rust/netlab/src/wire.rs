@@ -256,10 +256,160 @@ pub fn decode_header_lines(bytes: &[u8]) -> Vec<(String, String)> {
         .collect()
 }
 
+// ─────────────────────────────────────────
+// 证书固定（SPKI pin）的配置通道
+// ─────────────────────────────────────────
+//
+// JNI 侧把 pin 传进来用行格式：`<host|*>\t<64 位十六进制>\r\n`（host 为 `*` = 全局）。
+//
+// ⚠️ 这条通道是**安全红线**（设计 §6）：没有它，自研传输相对 OkHttp 就是
+// 「证书固定被静默降级」。所以解析必须**严格**：
+//   · 十六进制长度不为 64 → 丢弃该行（并在解析结果里报告），**绝不**截断/补零；
+//   · 非十六进制字符 → 丢弃该行；
+//   · 无法识别分隔符 → 丢弃该行。
+// 宁可「某条 pin 没生效」也不要「用错指纹还当成功」——后者是静默降级。
+//
+// 返回 `(pins, rejected)`：`rejected` 是**被拒的原始行**，供 JNI/Kotlin 侧打日志。
+// 为什么不直接 panic/报错：一条格式错的 pin 不应让整个请求失败，但**必须可见**。
+
+/// 解析 pin 行格式。返回 `(有效 pins, 被拒的原始行)`。
+///
+/// 每项 pins 为 `(Option<host>, [u8; 32])`：host 为 `None` 表示全局生效。
+pub fn parse_pin_lines(bytes: &[u8]) -> (Vec<(Option<String>, [u8; 32])>, Vec<String>) {
+    let text = String::from_utf8_lossy(bytes);
+    let mut pins = Vec::new();
+    let mut rejected = Vec::new();
+    for raw in text.split("\r\n").filter(|l| !l.is_empty()) {
+        match parse_one_pin(raw) {
+            Some(p) => pins.push(p),
+            None => rejected.push(raw.to_string()),
+        }
+    }
+    (pins, rejected)
+}
+
+fn parse_one_pin(line: &str) -> Option<(Option<String>, [u8; 32])> {
+    // 分隔符用制表符：host 里不会有制表符，且比 ':' 更不易与 IPv6/端口混淆。
+    let (host_part, hex_part) = line.split_once('\t')?;
+    let host = host_part.trim();
+    let hex = hex_part.trim();
+    // 严格要求 64 个十六进制字符 = 32 字节。长度不对直接拒，绝不补零/截断。
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let hi = hex.as_bytes()[i * 2] as char;
+        let lo = hex.as_bytes()[i * 2 + 1] as char;
+        // 大小写都接受（Kotlin 侧可能给大写）；非法字符 → 整行拒。
+        *byte = (hi.to_digit(16)? as u8) << 4 | (lo.to_digit(16)? as u8);
+    }
+    let host = if host.is_empty() || host == "*" {
+        None
+    } else {
+        Some(host.to_ascii_lowercase())
+    };
+    Some((host, out))
+}
+
+/// 与 [`parse_pin_lines`] 对称的编码（测试与 Golden 生成用）。
+pub fn encode_pin_lines(pins: &[(Option<String>, [u8; 32])]) -> Vec<u8> {
+    let mut out = String::new();
+    for (host, pin) in pins {
+        out.push_str(host.as_deref().unwrap_or("*"));
+        out.push('\t');
+        for b in pin {
+            out.push_str(&format!("{b:02x}"));
+        }
+        out.push_str("\r\n");
+    }
+    out.into_bytes()
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+
+    fn hex_of(b: u8) -> String {
+        std::iter::repeat(format!("{b:02x}")).take(32).collect()
+    }
+
+    #[test]
+    fn parses_host_scoped_and_global_pins() {
+        let raw = format!("api.example.com\t{}\r\n*\t{}\r\n", hex_of(1), hex_of(2));
+        let (pins, rejected) = parse_pin_lines(raw.as_bytes());
+        assert!(rejected.is_empty());
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].0.as_deref(), Some("api.example.com"));
+        assert_eq!(pins[0].1, [1u8; 32]);
+        assert_eq!(pins[1].0, None, "`*` 表示全局");
+        assert_eq!(pins[1].1, [2u8; 32]);
+    }
+
+    #[test]
+    fn roundtrip_is_stable() {
+        let pins = vec![
+            (Some("a.example.com".to_string()), [7u8; 32]),
+            (None, [9u8; 32]),
+        ];
+        let (decoded, rejected) = parse_pin_lines(&encode_pin_lines(&pins));
+        assert!(rejected.is_empty());
+        assert_eq!(decoded, pins);
+    }
+
+    #[test]
+    fn rejects_wrong_length_instead_of_padding() {
+        // 安全红线：长度不对必须**拒**，绝不能补零/截断成 32 字节。
+        for bad in ["", "abcd", &hex_of(0)[..62], &format!("{}ff", hex_of(0))] {
+            let raw = format!("h\t{bad}\r\n");
+            let (pins, rejected) = parse_pin_lines(raw.as_bytes());
+            assert!(pins.is_empty(), "长度非 64 必须被拒：{bad:?}");
+            assert_eq!(rejected.len(), 1, "被拒的行必须可见：{bad:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_hex_instead_of_silently_zeroing() {
+        let mut s: Vec<char> = hex_of(0).chars().collect();
+        s[5] = 'z'; // 非十六进制
+        let raw = format!("h\t{}\r\n", s.into_iter().collect::<String>());
+        let (pins, rejected) = parse_pin_lines(raw.as_bytes());
+        assert!(pins.is_empty(), "含非十六进制字符必须整行拒，不得静默当 0");
+        assert_eq!(rejected.len(), 1);
+    }
+
+    #[test]
+    fn accepts_uppercase_hex() {
+        let raw = format!("h\t{}\r\n", hex_of(0xab).to_uppercase());
+        let (pins, rejected) = parse_pin_lines(raw.as_bytes());
+        assert!(rejected.is_empty());
+        assert_eq!(pins[0].1, [0xab; 32]);
+    }
+
+    #[test]
+    fn rejects_line_without_separator() {
+        let (pins, rejected) = parse_pin_lines(format!("{}\r\n", hex_of(1)).as_bytes());
+        assert!(pins.is_empty());
+        assert_eq!(rejected.len(), 1, "无法识别的行必须报告，不得静默丢");
+    }
+
+    #[test]
+    fn empty_input_yields_no_pins() {
+        let (pins, rejected) = parse_pin_lines(b"");
+        assert!(pins.is_empty() && rejected.is_empty());
+    }
+
+    #[test]
+    fn host_is_lowercased_for_matching() {
+        let raw = format!("API.Example.COM\t{}\r\n", hex_of(3));
+        let (pins, _) = parse_pin_lines(raw.as_bytes());
+        assert_eq!(pins[0].0.as_deref(), Some("api.example.com"), "host 需归一化后才能与 URL 匹配");
+    }
+}
+
 #[cfg(test)]
 mod line_tests {
     use super::*;
-
     #[test]
     fn header_lines_roundtrip_preserves_order() {
         let hs = vec![

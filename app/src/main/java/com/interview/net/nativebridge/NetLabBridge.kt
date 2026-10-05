@@ -21,10 +21,12 @@ import android.util.Log
  *   3. **安全对拍**：[spkiSha256Hex]，与 OkHttp `CertificatePinner` 比对同一张证书的指纹。
  *
  * ⚠️ 尚未接入的缺口（见 [NetLabBridge] 的 fetch 注释与 NETLAB 文档）：
- *   · 证书固定（pinning）的**配置通道**：kernel 已实现并有端到端验证，
- *     但「把 pin 从 Java 传进 Rust」还没接，故当前 fetch 走默认链路校验；
  *   · QUIC 连接复用（`reusedConnection` 恒为 false）；
- *   · 流式 body；Android 系统 CA 注入。
+ *   · 流式 body；Android 系统 CA 注入；`handshake` 完整重建。
+ *
+ * 证书固定的**配置通道已接通**（M3）：pin 经 `fetch(..., pins)` →
+ * `wire::parse_pin_lines` → rustls 自定义 verifier 在握手里生效；
+ * 两侧指纹一致性与「错误指纹必须被拒」有对拍与集成测试钉住。
  *
  * 设计文档：[DESIGN-rust-transport.md]、可行性：[CRONET-FEASIBILITY.md]。
  */
@@ -33,7 +35,7 @@ object NetLabBridge {
     private const val TAG = "NetLabNative"
 
     /** 与 `netlab_android::ABI_VERSION` 对齐；不匹配说明 APK 里是旧 .so。 */
-    const val EXPECTED_ABI_VERSION = 2
+    const val EXPECTED_ABI_VERSION = 3
 
     /** native 库是否加载且 ABI 匹配。 */
     val available: Boolean by lazy {
@@ -260,6 +262,7 @@ object NetLabBridge {
         body: ByteArray? = null,
         timeoutMillis: Long = 15_000,
         cancelHandle: CancelTokenHandle? = null,
+        pins: List<Pair<String?, ByteArray>> = emptyList(),
     ): FetchResult {
         if (!fetchAvailable) {
             return FetchResult.Failure(-1, "native 不可用：${NetLabNative.loadError ?: "ABI 不匹配"}")
@@ -272,6 +275,7 @@ object NetLabBridge {
                 body = body,
                 timeoutMs = timeoutMillis,
                 cancelHandle = cancelHandle?.rawHandle ?: 0L,
+                pins = encodePinLines(pins),
             )
         }.getOrNull() ?: return FetchResult.Failure(-1, "JNI 调用失败（可能 native 崩溃被拦）")
 
@@ -289,6 +293,51 @@ object NetLabBridge {
     /** 与 Rust `wire::encode_header_lines` 对应：`Name: value\r\n`。 */
     internal fun encodeHeaderLines(headers: List<Pair<String, String>>): ByteArray =
         headers.joinToString(separator = "") { (k, v) -> "$k: $v\r\n" }.toByteArray(Charsets.UTF_8)
+
+    /**
+     * 与 Rust `wire::parse_pin_lines` 对应：`<host|*>\t<64位hex>\r\n`。
+     *
+     * `host == null` 或 `"*"` 表示全局生效。
+     *
+     * ⚠️ **这里刻意做长度校验并抛错**（而不是像 Rust 侧那样悄悄丢弃非法行）：
+     * Kotlin 侧是配置的**产生方**，配置写错应当在最近的地方大声失败；
+     * Rust 侧是**消费方**，跨 FFI 收到的可能已被截断，故那边选择「拒收并报告」。
+     * 两侧策略不同是有意的，不是不一致。
+     */
+    internal fun encodePinLines(pins: List<Pair<String?, ByteArray>>): ByteArray? {
+        if (pins.isEmpty()) return null
+        val sb = StringBuilder()
+        pins.forEach { (host, pin) ->
+            require(pin.size == 32) { "SPKI 固定必须是 32 字节（SHA-256），实际 ${pin.size}" }
+            sb.append(host?.takeIf { it.isNotBlank() } ?: "*")
+            sb.append('\t')
+            pin.forEach { b -> sb.append("%02x".format(b)) }
+            sb.append("\r\n")
+        }
+        return sb.toString().toByteArray(Charsets.UTF_8)
+    }
+
+    /**
+     * 解析与 OkHttp `CertificatePinner` 同格式的 pin 串，取出其中的**十六进制 SPKI**。
+     *
+     * 支持 OkHttp 的三种写法：`sha256/BASE64`、`sha256/AAAAAAAAAAA=…`（base64）、
+     * 以及我们内部用的 64 位十六进制直给。返回 32 字节或 null。
+     *
+     * 存在意义：OkHttp 的 `CertificatePinner` 只提供「校验」不提供「取指纹」，
+     * 要证明两条实现算出**同一个指纹**，必须先能把它给的 base64 解成字节。
+     */
+    fun decodePinToSpki(pin: String): ByteArray? {
+        val body = pin.substringAfter("sha256/", pin).trim()
+        return when {
+            body.length == 64 && body.all { it.isDigit() || it.lowercaseChar() in 'a'..'f' } ->
+                ByteArray(32) { i -> body.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+            else -> runCatching {
+                // 用 okio 而不是 java.util.Base64：后者要 API 26，而 minSdk=24；
+                // okio 是 okhttp 既有依赖，纯 JVM、单测里也能跑。
+                okio.ByteString.Companion.run { body.decodeBase64() }?.toByteArray()
+            }.getOrNull()?.takeIf { it.size == 32 }
+        }
+    }
 
     /**
      * 解析 Rust 侧线格式。**必须与 `rust/netlab/src/wire.rs` 严格一致**，

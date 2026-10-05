@@ -80,10 +80,16 @@ object NetClient {
      * @param rustTransport 非 null 时，在**最后**追加 [RustTransportInterceptor]，
      *   让满足路由判据的请求改走 Rust HTTP/3。传 null（默认）则完全不接入 ——
      *   [shared]/[downloads] 因此保持既有行为，接入新传输**零回归风险**。
+     * @param levelProvider 覆盖网络档位判据（默认读**真实**信号）。仅供受控实验：
+     *   真实设备上无法按需把网络变成弱网，实验页要演示「档位命中」必须能注入。
+     *   ⚠️ 传它**不会**削弱安全检查 —— 主线程/https/代理/白名单仍逐条生效。
+     * @param pinProvider 覆盖证书固定（默认空 = 不 pin，仍做完整链校验）。同上，仅供实验。
      */
     fun build(
         config: NetConfig = NetConfig.DEFAULT,
         rustTransport: RustTransportConfig? = null,
+        levelProvider: (() -> NetworkLevel)? = null,
+        pinProvider: ((String) -> List<Pair<String?, ByteArray>>)? = null,
     ): OkHttpClient {
         return OkHttpClient.Builder()
             .dns(dns)
@@ -116,7 +122,15 @@ object NetClient {
             // 传输：Rust HTTP/3 —— 必须在**最后**追加，才能保留上面所有拦截器。
             // （放前面会让重试/自适应超时看不到这些请求，静默失效。）
             .apply {
-                rustTransport?.let { addInterceptor(RustTransportInterceptor(config = it)) }
+                rustTransport?.let {
+                    addInterceptor(
+                        RustTransportInterceptor(
+                            config = it,
+                            levelProvider = levelProvider ?: { networkQuality().level },
+                            pinProvider = pinProvider ?: { emptyList() },
+                        )
+                    )
+                }
             }
             .build()
     }
@@ -164,34 +178,18 @@ object NetClient {
     fun buildWithRustTransport(
         config: NetConfig = NetConfig.DEFAULT,
         rustTransport: RustTransportConfig = RustTransportConfig(enabled = true, hostAllowlist = setOf("api.github.com")),
-    ): OkHttpClient = build(config, rustTransport)
+        levelProvider: (() -> NetworkLevel)? = null,
+        pinProvider: ((String) -> List<Pair<String?, ByteArray>>)? = null,
+    ): OkHttpClient = build(config, rustTransport, levelProvider, pinProvider)
 
     /**
      * 构建期对该 URL 的路由判定（供实验页展示「为什么走/不走 Rust」）。
-     * 纯逻辑，不发起请求，不读网络状态以外的任何东西。
+     *
+     * 实际逻辑在 [explainRoute]（纯逻辑、可单测）；这里只做**生产同形**的委托：
+     * 用「开关打开 + 白名单该 host」的配置，把除总开关外的每道闸门都展示出来。
      */
-    fun explainRoute(url: String, method: String = "GET"): String {
-        val parsed = runCatching { url.toHttpUrl() }.getOrNull()
-            ?: return "URL 非法：$url"
-        val q = networkQuality()
-        val cfg = RustTransportConfig(
-            enabled = true,
-            hostAllowlist = setOf(parsed.host),
-        )
-        val decision = decideRustRoute(
-            url = parsed,
-            method = method,
-            hasProxy = false,
-            bodySize = 0,
-            level = q.level,
-            onMainThread = false,
-            config = cfg,
-        )
-        return when (decision) {
-            is RouteDecision.Route -> "✅ 走 Rust HTTP/3（level=${q.level}）"
-            is RouteDecision.Skip -> "➡ 走 OkHttp：${decision.reason}（level=${q.level}）"
-        }
-    }
+    fun explainRoute(url: String, method: String = "GET"): String =
+        explainRoute(url = url, method = method)
 
     /**
      * 全局网络质量快照。UI 与降级策略统一从这里读，不直接碰 NetworkQuality，

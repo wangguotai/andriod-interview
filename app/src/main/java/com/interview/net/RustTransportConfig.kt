@@ -1,6 +1,7 @@
 package com.interview.net
 
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrl
 
 /**
  * Time: 2026/10/5
@@ -87,6 +88,20 @@ data class RustTransportConfig(
      * 64KB 是「小 body」的合理上界，也是避免把大文件整个读进内存的护栏。
      */
     val maxRequestBodyBytes: Long = 64 * 1024,
+
+    /**
+     * 运行期回退：Rust 传输**已开始但失败**时，是否交回 OkHttp 重试一次。
+     *
+     * 默认 true，且这是设计文档 A §8 验收标准 1「回退可用」的落实点。
+     * 语义边界（必须说清，否则回退会变成隐患）：
+     *   · 只对**幂等方法**回退（GET/HEAD/PUT/DELETE）—— 非幂等请求重发有副作用，
+     *     不能因为「一次传输失败」就替调用方做重发决定；
+     *   · **证书固定失败不回退** —— pin 不匹配是安全事件（可能正被中间人），
+     *     回退等于换个通道再试一次，把安全告警变成静默掩盖；
+     *   · **取消不回退** —— 用户已主动放弃，重发违反其意图。
+     * 满足上述条件时才回退，且每一次回退都会打日志（可观测，不静默）。
+     */
+    val fallbackOnFailure: Boolean = true,
 )
 
 /**
@@ -145,3 +160,47 @@ internal fun decideRustRoute(
 
 /** 与 Rust 侧 `request::ALLOWED_METHODS` 一致（两端一致性由单测与对拍钉住）。 */
 internal val ALLOWED_METHODS = setOf("GET", "HEAD", "PUT", "DELETE")
+
+/**
+ * 当前是否主线程。与拦截器的默认判据同一份实现，避免两处判断漂移。
+ */
+internal fun isOnMainThread(): Boolean = try {
+    android.os.Looper.myLooper() == android.os.Looper.getMainLooper()
+} catch (_: Throwable) {
+    false
+}
+
+/**
+ * 判断并**解释**「这个 URL 会不会走 Rust」，返回人类可读的一行结论。
+ *
+ * 为什么把这个函数放在这里（而不是留在 [NetClient]）：它是纯逻辑、【可测】，
+ * 放在 Android object（NetClient）里会让单测不得不初始化整个网络层。
+ * 与 [decideRustRoute] 同居一处，判定与解释永远同源 —— 否则「解释」迟早和「判定」漂移，
+ * 出现「日志说会走、实际没走」这类最难查的问题。
+ *
+ * @param config 指定配置；默认用「开关打开、只白名单该 host」的**生产同形**配置，
+ *   以便把判定链里除总开关外的每一道闸门都展示出来。
+ * @param level / onMainThread 传 null 表示读**真实**信号；显式传值则用给定值
+ *   （供单测与确定性演示 —— 真实 Looper/网络档位在单测里不可控）。
+ */
+fun explainRoute(
+    url: String,
+    method: String = "GET",
+    config: RustTransportConfig? = null,
+    level: NetworkLevel? = null,
+    onMainThread: Boolean? = null,
+    hasProxy: Boolean = false,
+    bodySize: Long = 0,
+): String {
+    val parsed = runCatching { url.toHttpUrl() }.getOrNull() ?: return "URL 非法：$url"
+    val cfg = config ?: RustTransportConfig(enabled = true, hostAllowlist = setOf(parsed.host))
+    val lvl = level ?: NetworkQuality.currentQuality().level
+    val main = onMainThread ?: isOnMainThread()
+
+    return when (
+        val d = decideRustRoute(parsed, method, hasProxy, bodySize, lvl, main, cfg)
+    ) {
+        is RouteDecision.Route -> "✅ 走 Rust HTTP/3（level=$lvl）"
+        is RouteDecision.Skip -> "➡ 走 OkHttp：${d.reason}（level=$lvl）"
+    }
+}

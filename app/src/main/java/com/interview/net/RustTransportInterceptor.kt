@@ -154,6 +154,14 @@ class RustTransportInterceptor(
         // 因此不绕开泳道治理（真正阻塞的 fetch 仍在 net 泳道线程上）。
         val token = NetLabBridge.newToken()
         val done = java.util.concurrent.atomic.AtomicBoolean(false)
+        // ⚠️ 这里刻意用裸 Thread，是本文件**唯一**的线程创建点，理由必须写清：
+        //
+        // 1. 它不是 IO、不是计算，只是轮询一个内存布尔 —— 不占泳道配额（与 rust/README 登记一致）。
+        // 2. 更关键的是**生命周期**：native 侧句柄在 `token.close()`（finally）后被释放，
+        //    而 cancelTokenCancel 会对裸指针做 `&*ptr` —— 释放后再 cancel 就是 use-after-free。
+        //    只有「可 join 的线程 + 确保它在 close 前退出」才能给出这个保证；
+        //    ThreadPools 的任务不可 join，无从保证。故这里不能用泳道。
+        @Suppress("NewThreadUsage")
         val watchdog = if (token != null) {
             Thread({
                 try {
@@ -210,6 +218,10 @@ class RustTransportInterceptor(
         } finally {
             done.set(true)
             watchdog?.interrupt() // 让它立刻退出，不空转到下一个轮询周期
+            // ⚠️ join 不是可选的：必须在 `token.close()` **之前**确认看门狗已停止，
+            // 否则它可能在 native 句柄被释放后再调一次 cancelTokenCancel —— 那是 UB。
+            // 用 interrupt 后线程最多阻塞在 sleep(50ms) 上，join 的等待极短。
+            runCatching { watchdog?.join(CANCEL_JOIN_MILLIS) }
             token?.close()        // 恰好释放一次（AutoCloseable）
         }
     }
@@ -333,6 +345,16 @@ class RustTransportInterceptor(
          * 两侧同频即可，再快也换不来更早的停止。
          */
         private const val CANCEL_POLL_MILLIS = 50L
+
+        /**
+         * 收尾时等待看门狗退出的上限（毫秒）。
+         *
+         * 取 2×轮询周期：正常情况下 interrupt 会立刻唤醒 sleep，join 立即返回；
+         * 给一个上限是防御「线程被调度器卡住」的极端情况，避免请求收尾被无限拖住。
+         * 超时后仍会 close 句柄 —— 这是**已知的、被权衡过的**残余风险（概率极低），
+         * 而非疏漏。真要彻底消除，需把取消令牌的所有权也做成 join 可保证的结构。
+         */
+        private const val CANCEL_JOIN_MILLIS = 100L
 
         /**
          * 允许**运行期回退**的方法：与 [AdaptiveRetryInterceptor] 的幂等语义同一套。

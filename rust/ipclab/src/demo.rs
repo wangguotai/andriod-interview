@@ -11,15 +11,28 @@
 //!     - 第 3 项：整段日志（含 `[tag]` 前缀），上层原样上屏。
 //! - 不在 Kotlin 侧二次拼接日志 —— 证据的可信度来自「它就是 native 打出来的原文」。
 //!
-//! 本文件随里程碑逐步生长：当前为骨架，尚无任何具体演示。
+//! 本文件随里程碑逐步生长：M1 引入 AF_UNIX（abstract / filesystem）自测与服务端。
 
 /// 按名字分发到具体演示。名字与 Kotlin 侧 `IpcNativeDemo` 的枚举一一对应。
 ///
-/// - [kind]：演示类型名
-/// - [arg]：随 kind 变化的参数（路径 / 待共享文本等）
+/// - [kind]：`unix`（自测）/ `unix_serve`（服务一条 Java LocalSocket 连接）
+/// - [arg]：`unix` 传 filesystem socket 路径；`unix_serve` 传 abstract 名字
 #[cfg(ipc_linux)]
-pub fn run(kind: &str, _arg: &str) -> (bool, bool, String) {
-    (false, false, format!("[ipclab] 未知演示类型: {}\n", kind))
+pub fn run(kind: &str, arg: &str) -> (bool, bool, String) {
+    // 先把 SIGPIPE 设为忽略（dlopen 进来的 cdylib 不会自动做这件事），
+    // 否则「向已断开的 socket 写」会直接杀掉 App 进程而不是回 EPIPE。
+    crate::ensure_init();
+    match kind {
+        "unix" => (true, true, crate::stream::unix_socket_selftest(arg)),
+        "unix_serve" => {
+            // arg = abstract 名字；服务一条 Java LocalSocket 连接（默认 5s 超时）。
+            match crate::stream::serve_abstract_once(arg, 5000) {
+                Ok(log) => (true, true, log),
+                Err(e) => (true, false, format!("[unix] 服务端失败: {}\n", crate::sys::errno_name(e))),
+            }
+        }
+        other => (false, false, format!("[ipclab] 未知演示类型: {}\n", other)),
+    }
 }
 
 /// 宿主非 Linux（如 macOS）时的降级：明确告知「不支持」，而不是编译失败或静默跳过。
@@ -42,7 +55,7 @@ pub fn run(kind: &str, _arg: &str) -> (bool, bool, String) {
 /// 支持的演示类型列表（供 Kotlin 侧做能力探测 / 展示）。
 #[cfg(ipc_linux)]
 pub fn supported() -> Vec<&'static str> {
-    vec![]
+    vec!["unix", "unix_serve"]
 }
 
 #[cfg(not(ipc_linux))]
@@ -60,5 +73,11 @@ mod tests {
         let (_available, ok, log) = run("nope", "");
         assert!(!ok);
         assert!(log.contains("未知演示类型"));
+    }
+
+    #[cfg(ipc_linux)]
+    #[test]
+    fn supported_lists_all() {
+        assert_eq!(supported().len(), 2);
     }
 }

@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Internet：Socket demo 里的 TCP loopback 需要它（连 127.0.0.1）。
+         即便只连本机，Android 也要求声明 INTERNET 才能建 TCP socket。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_ipc_lab"

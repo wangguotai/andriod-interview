@@ -43,7 +43,7 @@ data class NetConfig(
     /**
      * per-call 超时**上限**。自适应估算再大也不越过它。
      * 与 [com.interview.thread.ThreadPools] 的 net 泳道直接相关：
-     * 泳道 core=4，一个 Call 占线程多久就少一条通道多久。
+     * 泳道 core=8，一个 Call 占线程多久就少一条通道多久。
      * 60s 是「宁可失败也别把泳道焊死」的上限，**经验值**。
      */
     val maxCallTimeoutMillis: Long = 60_000,

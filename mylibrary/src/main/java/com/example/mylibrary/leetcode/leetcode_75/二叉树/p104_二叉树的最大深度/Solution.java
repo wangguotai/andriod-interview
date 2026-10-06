@@ -15,7 +15,7 @@ public class Solution {
     int depth = 0;
 
     public static void main(String[] args) throws IllegalAccessException {
-        int depth = new Solution().myMaxDepth(
+        int depth = new Solution104().myMaxDepth(
                 TreeNode.createTreeNode(3, 9, 20, -1, -1, 15, 7)
         );
         System.out.println(depth);

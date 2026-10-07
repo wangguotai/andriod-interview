@@ -1,0 +1,23 @@
+[package]
+name = "vmp"
+version = "0.1.0"
+edition = "2021"
+description = "VMP 加固 Lab：自定义字节码 VM + 受保护算子的虚拟机化实现（面试演示）"
+license = "MIT"
+build = "build.rs"
+
+[lib]
+# rlib：给 vmp_android 链接用；同时让本机 cargo test 可跑
+crate-type = ["rlib"]
+
+# 刻意零依赖：VM 解释器、ChaCha20 都自己写。
+# 理由不只是「省一个依赖」，而是让「加固」这件事的每一行都可解释 ——
+# 面试里被追问「你的 VM 到底做了什么」时，不能有一层是「库帮我做的」。
+[dependencies]
+
+[build-dependencies]
+# 也不引依赖：build.rs 里自己实现 ChaCha20（与 src/crypt.rs 同源逻辑）。
+
+[dev-dependencies]
+# 对拍测试需要拿原生实现当基准 —— 这正是「加固后还算得对吗」这条红线的参照物。
+imagepipeline = { path = "../imagepipeline" }

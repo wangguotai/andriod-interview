@@ -1,0 +1,21 @@
+[package]
+name = "vmp_android"
+version = "0.1.0"
+edition = "2021"
+description = "vmp 的 JNI 绑定层：只做类型翻译、内存视图装配与完整性校验，不含算法"
+license = "MIT"
+
+[lib]
+# cdylib：产出 libvmp_android.so，由 System.loadLibrary("vmp_android") 加载。
+# 名字与 imagepipeline 的 .so 刻意不同：本 Lab 是一个**独立**的加固产物，
+# 不与既有图像库共享加载状态，这样「加固版 / 原生版」可以同时装、同时比。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vmp = { path = "../vmp" }
+# 原生参考路径：本 Lab 要对拍并给出「VMP vs 原生」的性能谱，
+# 原生实现在 imagepipeline 里（M3/M5 的既有代码），直接复用而不是再抄一份。
+imagepipeline = { path = "../imagepipeline" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21", default-features = false }

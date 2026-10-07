@@ -32,6 +32,11 @@
         - 根据前序遍历和后序遍历还原二叉树；
         - 股票交易问题： p121、p122
 
+     > 2026-10-07 补充：第 1 点已补齐 —— 见
+     > [`稳定性监控/INTERVIEW-稳定性监控.md`](app/src/main/java/com/interview/稳定性监控/INTERVIEW-稳定性监控.md)
+     > （ANR 的三条采集通道 + 真机实测的判据/阈值/诚实边界），
+     > 配套可跑实验页 `StabilityLabActivity`（见同目录 `README.md`）。
+
 ## day 2.23 先应付完工作， 在处理下算法题，之后看自定义View
 
     自定义View 构造函数中的第三、四个参数（详见笔记）

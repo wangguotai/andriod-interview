@@ -156,6 +156,16 @@
             android:exported="true"
             android:label="网络度量仪表盘"
             android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- ═══════════════════════════════════════════
+             稳定性监控 Lab —— ANR / Crash / 卡顿 线上监控
+             三类数据各一条采集链路 + 一个统一上报出口
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.稳定性监控.StabilityLabActivity"
+            android:exported="true"
+            android:label="稳定性监控 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
     </application>
 
 </manifest>

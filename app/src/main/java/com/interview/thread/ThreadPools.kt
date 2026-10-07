@@ -1,5 +1,6 @@
 package com.interview.thread
 
+import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
@@ -452,6 +453,72 @@ object ThreadPools {
     }
 
     private val CORE_CPU = maxOf(2, Runtime.getRuntime().availableProcessors() - 1)
+
+    // ─────────────────────────────────────────────
+    // 受治理的「独占线程」出口
+    // ─────────────────────────────────────────────
+
+    /**
+     * 受治理的**独占线程**：走统一命名 / 优先级工厂，但不经队列、不吃配额。
+     *
+     * ─── 为什么必须有这个出口（而不是让调用方自己 new Thread）───
+     *
+     * 有些线程**天然不能放进共享池**：
+     *   · ANR 哨兵：它要 park 住并周期性探测主线程，塞进泳道会**永久占住一个
+     *     worker**，把「探测主线程」这套机制本身变成一次线程饥饿；
+     *   · 监控回调线程：FrameMetrics 需要一个 Looper 承载每帧回调，池线程没有 Looper。
+     *
+     * 此前的处理方式有两种，都不好：调用方自己 `new Thread`（绕过收口，Lint 拦不住
+     * 全部形态，`lint.xml` 里那两条「已确认的技术债」就是这么来的）；或者干脆不做。
+     * **收口层不给合法出口，规则就只会被绕过** —— 这是本出口存在的理由，
+     * 它是一次**收口层的显式能力补齐**，不是后门。
+     *
+     * ⚠️ 边界：它不做队列、不管并发上限、不做配额。调用方**必须自证**「这条线程
+     *    是常驻的、数量恒定（O(1)、与请求量无关）」，否则就是在重建线程滥用。
+     *    一次性任务请用泳道 `execute()`。
+     *
+     * @param name     线程名（最终形如 `app-<name>`）
+     * @param priority 内核优先级，唯一路径见 [NamedThreadFactory] 注释
+     * @param daemon   false 表示它不阻止进程退出（Android 上进程退出本就由系统决定）
+     * @param block    线程体
+     */
+    fun dedicatedThread(
+        name: String,
+        priority: Int = Process.THREAD_PRIORITY_BACKGROUND,
+        daemon: Boolean = true,
+        block: () -> Unit,
+    ): Thread = NamedThreadFactory("app-$name", daemon = daemon, androidPriority = priority)
+        .newThread(block)
+
+    /**
+     * 受治理的**带 Looper 的独占线程**（`HandlerThread` 的收口版）。
+     *
+     * 为什么不直接用 `android.os.HandlerThread`：
+     *   1. 统一命名（`app-<name>-N`，线程快照里可溯源），HandlerThread 的名字
+     *      一旦被调用方取成默认值就丢了来源；
+     *   2. 优先级只保留 `Process.setThreadPriority` 一条路径（见 [NamedThreadFactory]）；
+     *   3. Lint 规则明确禁止裸用 `HandlerThread`，此处提供一个合规落点。
+     *
+     * ⚠️ 阻塞语义：本方法会**阻塞调用线程**直到目标线程 `Looper.prepare()` 完成
+     *    （数百微秒），因此**不要在锁内调用**，也不要从主线程的高频路径调用。
+     *
+     * @return 已在目标线程上 prepare 好的 [Looper]；此后该 Looper 进入 `loop()` 常驻。
+     */
+    fun looperThread(
+        name: String,
+        priority: Int = Process.THREAD_PRIORITY_BACKGROUND,
+    ): Looper {
+        val ready = CountDownLatch(1)
+        var looper: Looper? = null
+        dedicatedThread(name, priority) {
+            Looper.prepare()
+            looper = Looper.myLooper()
+            ready.countDown()
+            Looper.loop() // 常驻，直到 quit()
+        }.start()
+        ready.await()
+        return looper ?: error("Looper 未能在 app-$name 上建立")
+    }
 
     // ─────────────────────────────────────────────
     // 对照实验

@@ -58,6 +58,12 @@ object HomeCatalog {
             activityClass = com.interview.thread.ThreadGovernanceActivity::class.java,
             tag = "thread",
         ),
+        HomeEntry(
+            title = "稳定性监控 Lab",
+            subtitle = "ANR / Crash / 卡顿 三条线上采集链路 + 统一上报出口",
+            activityClass = com.interview.稳定性监控.StabilityLabActivity::class.java,
+            tag = "stability",
+        ),
     )
 
     /** 基础：单点知识 / 控件练习页 */

@@ -191,19 +191,46 @@ class ThreadGovernanceActivity : AppCompatActivity() {
 
         bind(R.id.btn_error_raw) {
             // ⚠️ 危险对照：故意用无防护的裸池，验证「不接异常真的会杀进程」
+            //
+            // ⚠️⚠️ 必须先把稳定性监控装的全局 handler 临时卸下，否则本实验是**假绿**的：
+            //        稳定性监控在 MyApplication.attachBaseContext 就装了
+            //        swallowBackground=true 的 handler，会把后台异常吞掉 →
+            //        进程不死 → 看不到"未防护的后果"（真机实测 PID 不变）。
+            //        详见 INTERVIEW-稳定性监控.md 第 4.3 节。
+            val uninstalled = com.interview.稳定性监控.CrashMonitor.uninstallForExperiment()
             emit(
                 "【对照实验：无防护的裸线程池】\n" +
+                        (if (uninstalled) {
+                            "已临时卸下稳定性监控的全局 handler（本实验需要进程真的死）。\n"
+                        } else {
+                            "⚠️ 未发现已安装的崩溃 handler —— 本对照可能不成立。\n"
+                        }) +
                         "即将向一个没有异常防护的池提交抛异常的任务。\n" +
                         "预期：app 进程被杀（logcat 可见 FATAL EXCEPTION）。\n" +
                         "这就是「线程池异常收集」没做好时的真实后果。\n\n" +
-                        "⚠️ 若下方没有后续输出，说明进程确实崩了 —— 这正是实验目的。"
+                        "⚠️ 若下方没有后续输出，说明进程确实崩了 —— 这正是实验目的。\n" +
+                        "⚠️ 若进程**没有**被杀（PID 不变），说明仍有别的 handler 接管了异常。"
             )
             val rawPool = java.util.concurrent.ThreadPoolExecutor(
                 1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
                 java.util.concurrent.LinkedBlockingQueue(4),
             )
             rawPool.execute {
+                // ⚠️ 这条在**裸池线程**上抛，进程会死 → 下面的 reinstall 不会被执行。
+                //    这正是"进程被杀"的实验目的；handler 会在下次启动时由
+                //    MyApplication.attachBaseContext 重新安装，不会永久丢失。
                 throw IllegalStateException("未防护的线程池任务异常 → 应导致进程被杀")
+            }
+            // 兜底：若本 ROM 的自定义 handler 选择"吞掉后台异常"导致进程没死，
+            // 这个 delayed 复查会**把监控装回去**（不能让实验副作用泄漏成常态）。
+            ThreadPools.background.execute("exp.reinstall") {
+                Thread.sleep(2000)
+                if (com.interview.稳定性监控.CrashMonitor.reinstallForExperiment()) {
+                    android.util.Log.i(
+                        "ThreadDemo",
+                        "进程未被杀 —— 已把稳定性监控的 handler 装回（实验副作用不泄漏）",
+                    )
+                }
             }
         }
 

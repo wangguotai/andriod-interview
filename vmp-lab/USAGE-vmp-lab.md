@@ -97,6 +97,12 @@ cargo test -p vmp_android --release --test host_bench -- --ignored --nocapture  
 
 ## 看代码的入口
 
+**先看阅读路线**：[`GUIDE-vmp-code-reading.md`](GUIDE-vmp-code-reading.md) ——
+按依赖顺序排的 8 站（契约 → VM 核心 → 构建期 → 生成器 → 汇编器 → JNI → 测试），
+每站标注该看的行号、坑在哪、以及读完的自测题。
+
+细节索引：
+
 | 想知道 | 看哪儿 |
 |---|---|
 | 字节码长什么样、指令怎么编码 | [`rust/vmp/ISA.md`](../rust/vmp/ISA.md) |

@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  VMP 加固 Lab 主界面。
+
+  布局分三段，对应本 Lab 要回答的三个问题：
+    1. 顶部状态条  ——「加固到底做了什么」（程序密文长度、头部完好、VM 自检）；
+    2. 中部按钮区  ——「一次动作」：跑对拍 / 跑基准 / 看两条路径的效果；
+    3. 底部日志区  ——「证据」：逐位对拍结论、耗时、触达页数，全部原文可选中。
+  把三者放同一屏，是为了「边跑边对照」——切走页面就切走了证据。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F6F8"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/vmp_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp"
+        android:paddingBottom="8dp"
+        android:textColor="#37474F"
+        android:textSize="12sp"
+        tools:text="vmp abi=1 isa=1 ..." />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingBottom="10dp">
+
+        <Button
+            android:id="@+id/vmp_btn_status"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="加固状态"
+            android:textColor="#00897B"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/vmp_btn_golden"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="逐位对拍"
+            android:textColor="#00897B"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/vmp_btn_ab"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="A/B 对照"
+            android:textColor="#00897B"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/vmp_btn_bench"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="跑基准"
+            android:textColor="#00897B"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#E3E5E8" />
+
+    <ScrollView
+        android:id="@+id/vmp_log_scroll"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#101418"
+        android:padding="10dp">
+
+        <TextView
+            android:id="@+id/vmp_log"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textColor="#D9E2EC"
+            android:textIsSelectable="true"
+            android:textSize="11sp" />
+    </ScrollView>
+
+</LinearLayout>

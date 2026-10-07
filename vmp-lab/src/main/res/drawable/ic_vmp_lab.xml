@@ -1,0 +1,14 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 一个「锁 + 芯片」的意象：加固后的模块。
+         锁体压在芯片引脚上，示意「核心逻辑被封在被保护的容器里」。 -->
+    <path
+        android:fillColor="#37474F"
+        android:pathData="M7,3h2v2h6V3h2v2h2v2h-2v2h-2V7H9v2H7V7H5V5h2zM5,11h14v10H5z" />
+    <path
+        android:fillColor="#00897B"
+        android:pathData="M11,13h2v6h-2z" />
+</vector>

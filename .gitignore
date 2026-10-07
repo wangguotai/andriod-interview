@@ -9,6 +9,7 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+/vmp-lab/build
 /captures
 .externalNativeBuild
 .cxx

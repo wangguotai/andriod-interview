@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 不需要任何权限：本 Lab 全部计算在本地、无网络、无存储访问。
+         特意把这一点写下来 —— 「加固 Demo 需要什么权限」本身是个常被追问的点，
+         答案是「零」，加固不改权限模型。 -->
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_vmp_lab"
+        android:label="VMP 加固 Lab"
+        android:roundIcon="@drawable/ic_vmp_lab"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.VmpLab">
+
+        <!-- 唯一入口。独立 applicationId（com.interview.vmplab），可单独安装/卸载，
+             与主 app 及其它 Lab 互不影响。 -->
+        <activity
+            android:name=".ui.VmpLabActivity"
+            android:exported="true"
+            android:label="VMP 加固 Lab">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>

@@ -32,6 +32,22 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // ─── ABI 只保留 arm64-v8a ───
+        //
+        // 起因：`:vmp-core` 引入了 VMP 加固的 Rust 产物（libvmp_android.so），
+        // 而 `rust/vmp-android` 只编 arm64-v8a（教学场景够用，四 ABI 会显著拖慢
+        // cargo 交叉编译）。ABI 限制会**从 library 传染到宿主**，所以这里必须显式收口。
+        //
+        // 影响面（写清楚，避免以后忘了这是谁带来的）：
+        //   · 本仓库其余 native（imagepipeline / netlab / threadhook）也一起只剩 arm64；
+        //   · 真机（arm64）与 arm64 模拟器不受影响；
+        //   · 32 位设备（armeabi-v7a / x86）将**装不上**这个 APK。
+        //     若将来要支持，做法是给 rust/vmp-android 补上对应 rustup target，
+        //     再删掉这一行 —— rust_build.cmake 本身已支持四个 ABI。
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -167,6 +183,11 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.recyclerview)
+
+    // VMP 加固 Lab 的实现层（Rust 虚拟机 + JNI + VmpBridge + VmpLabActivity）。
+    // 抽成 library 而不是在 app 里再抄一份：主页入口要求 Activity 在本 app 内，
+    // 但实现只能有一份 —— 否则修一个 bug 要改两处，漂移了也不会报错。
+    implementation(project(":vmp-core"))
     // 图片加载 Lab：Glide 4.12（降采样教学对象）
     implementation(libs.com.github.bumptech.glide)
     // okhttp 直连：下载"全尺寸原图"用 —— Glide 内部也依赖它，此处显式声明避免隐式传递

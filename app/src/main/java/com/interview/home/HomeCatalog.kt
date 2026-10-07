@@ -64,6 +64,15 @@ object HomeCatalog {
             activityClass = com.interview.稳定性监控.StabilityLabActivity::class.java,
             tag = "stability",
         ),
+        HomeEntry(
+            title = "VMP 加固 Lab",
+            subtitle = "三算子编译成加密字节码，与原生实现逐位对拍并量出代价",
+            // 实现来自 :vmp-core（library）—— 这也是它必须是「本 app 内的 Activity」
+            // 而不是独立 APK 的原因：HomeEntry 只接受 Class<out Activity>，
+            // 跨 APK 的入口在这里表达不了。独立可安装版仍由 :vmp-lab 提供。
+            activityClass = com.interview.vmp.ui.VmpLabActivity::class.java,
+            tag = "vmp",
+        ),
     )
 
     /** 基础：单点知识 / 控件练习页 */

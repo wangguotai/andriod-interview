@@ -166,6 +166,20 @@
             android:exported="true"
             android:label="稳定性监控 Lab"
             android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- ═══════════════════════════════════════════
+             VMP 加固 Lab —— 加密字节码虚拟机 + 逐位对拍 + 基准
+             实现来自 :vmp-core（library）；Activity 声明必须留在宿主
+             Manifest —— library 里声明会让每个宿主 inherits 这个页面。
+             ⚠️ 名字必须写**全限定名**：:vmp-core 的 namespace 是
+             com.interview.vmp，而本 app 的 namespace 是 com.example.myapplication，
+             写 `.ui.VmpLabActivity` 会被解析成 com.example.myapplication.ui.*（不存在）。
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.vmp.ui.VmpLabActivity"
+            android:exported="false"
+            android:label="VMP 加固 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
     </application>
 
 </manifest>

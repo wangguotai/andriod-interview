@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  :vmp-core 的 Manifest —— 只是一个 android library，**没有** application/activity 声明。
+
+  ─── 为什么这里什么都没有 ───
+  library 的 Manifest 会被 merge 进依赖它的每个 app。在这里声明 Activity 或主题，
+  就会把「这是个有自己入口的 App」这个身份强加给 :app —— 而 :app 只是要复用
+  VmpLabActivity 这一个页面。所以：
+
+    · Activity 的声明放在**宿主**的 Manifest 里（:vmp-lab 或 :app），
+      毕竟「这个页面在哪个 App 里、要不要 exported」是宿主的决定；
+    · 主题 `Theme.VmpLab` 定义在 library 的 res/values/themes.xml（两边共用一份），
+      宿主的 Manifest 通过 `@style/Theme.VmpLab` 引用它。
+
+  ─── 无需权限 ───
+  本 Lab 的全部计算都在本地，无网络、无存储访问。加固不改权限模型 ——
+  「加固 Demo 需要什么权限」这个常被追问的问题，答案是零。
+-->
+<manifest />

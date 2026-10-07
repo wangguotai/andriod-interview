@@ -1,33 +1,38 @@
-import java.util.Properties
-
+/**
+ * :vmp-lab —— VMP 加固实验台（可单独安装的 Demo App）。
+ *
+ * ─── 本 module 现在几乎什么都不做了 ───
+ *
+ * 实现（native 交叉编译、JNI、VmpBridge、VmpLabActivity、布局）全部搬到了
+ * [:vmp-core]，因为主 app 的首页也要用它 —— `HomeCatalog` 只接受**本 app 内**的
+ * Activity（`Class<out Activity>`），独立 APK 挂不上去，所以 `:app` 必须自己承载
+ * 这份功能。共享成 library 之后，两边是**同一份**代码，不存在「首页那份和 Lab
+ * 那份行为不一样」这种漂移。
+ *
+ * 本 module 保留的只有两件事，而且都是「宿主 / 测试」职责：
+ *
+ * 1. **LAUNCHER 与 Manifest**：可单独安装、可单独启动。这是这个 Lab 的原有价值 ——
+ *    加固实验失败时不该波及正在用的主 app；
+ * 2. **androidTest**：金标准对拍与基准。放在这里而不是 library 里，是因为它们需要
+ *    「装一个带 instrumentation 的 APK」，搁在 library 会随依赖传染给 :app。
+ *    而 :vmp-lab 本来就是个可安装的 App，测试归它最自然。
+ *
+ * ─── 为什么保留而不是直接删掉 ───
+ * 「能单独装、单独跑、单独测」是这个加固实验的隔离前提。合进主 app 会让
+ * native 构建失败直接影响日常使用的 APK —— 那正是当初做成独立 module 要避免的事。
+ */
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
 }
 
-/**
- * :vmp-lab —— VMP 加固实验台（面试演示用）。
- *
- * ─── 为什么是一个独立 module，而不是往 app 里塞 ───
- *
- * 与 `:ipc-lab` 同一套理由，但这里还多两条：
- *
- * 1. **加固产物必须能与未加固产物并存、同时对拍**。本 Lab 的 native 侧产出的是
- *    一个**独立**的 `.so`（`libvmp_android.so`，由 `rust/vmp-android` 交叉编译），
- *    不替换 app 既有的 `libimagepipeline.so`。独立 module 让「装不装、卸不卸」互不影响 ——
- *    加固实验失败绝不能波及正在用的图片加载实验。
- * 2. **它自带 LAUNCHER，是一个可单独安装的 Demo App**（applicationId
- *    `com.interview.vmplab`），与 `:ipc-lab` / `:scroll-event-demo` 一致。
- *    主 app 侧零改动。
- *
- * ─── 包名 ───
- * `com.interview.vmp` 与其它 Lab 的包名风格一致（`com.interview.*`）。
- * JNI 符号名因此是 `Java_com_interview_vmp_VmpNative_*` —— 与
- * `rust/vmp-android/src/android_impl.rs` 里写死的符号必须**逐字符一致**，
- * 改包名/改类名都要同时改那边。
- */
 android {
-    namespace = "com.interview.vmp"
+    // 注意：namespace 与 :vmp-core 共用 `com.interview.vmp` 是**可以**的 ——
+    // 两者是不同 module，R 类不冲突，Kotlin 包也不冲突。好处是 Activity 的
+    // 全限定名在两边完全一致，Manifest 与首页登记都用同一个字符串。
+    // 唯一的实际影响：AndroidManifest 里的 Activity 名必须写全限定名而不是 `.ui.X`，
+    // 因为 namespace 变了（`.ui.X` 会解析成 com.interview.vmplab.ui.X，那是错的）。
+    namespace = "com.interview.vmplab"
     compileSdk = 34
 
     defaultConfig {
@@ -39,17 +44,15 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // native 只编 arm64-v8a：与 app 侧同一取舍（教学场景下真机与 arm64 模拟器都够，
-        // 四 ABI 会显著拖慢构建）。Kotlin 侧对 .so 缺失做降级，见 VmpBridge。
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
+        // :vmp-core 已经把 native 限成 arm64-v8a（见那边的注释），这里不重复声明 ——
+        // 重复声明会让「限制来自哪一层」变得难查。真实限制由 library 决定，
+        // 并会传染给所有宿主（含 :app）。
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
 
@@ -61,48 +64,21 @@ android {
         jvmTarget = "1.8"
     }
 
-    buildFeatures {
-        viewBinding = true
-        buildConfig = true
-    }
-
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-
-    defaultConfig {
-        externalNativeBuild {
-            // 把 Rust 工具链位置传给 CMake。Gradle 调起的 CMake 是独立进程，
-            // 不继承 shell 里导出的 RUSTUP_HOME/CARGO_HOME。从 local.properties 读，
-            // 其次取环境变量。不传的后果：cargo 找不到，CMake 只打 warning 就跳过 Rust，
-            // 构建「成功」但 APK 里没有 .so —— 最容易被当成假绿的坑。
-            cmake {
-                val localProps = Properties()
-                rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
-                    f.inputStream().use { localProps.load(it) }
-                }
-                val rustupHome: String? = localProps.getProperty("rustup.home") ?: System.getenv("RUSTUP_HOME")
-                val cargoHome: String? = localProps.getProperty("cargo.home") ?: System.getenv("CARGO_HOME")
-                if (!rustupHome.isNullOrBlank()) arguments("-DRUSTUP_HOME_VALUE=$rustupHome")
-                if (!cargoHome.isNullOrBlank()) arguments("-DCARGO_HOME_VALUE=$cargoHome")
-            }
-        }
-    }
+    // 不需要 viewBinding：本 module 已经没有任何布局（都随 UI 搬到了 :vmp-core）。
+    // 留一个开着但没布局的开关会让人以为这里还有界面代码。
 
     ndkVersion = "25.1.8937393"
 }
 
 dependencies {
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
-    implementation(libs.constraintlayout)
-    implementation(libs.androidx.recyclerview)
-    implementation(libs.androidx.lifecycle.runtime.ktx)
-    implementation(libs.org.jetbrains.kotlinx.coroutines.android)
+    // 全部实现来自这里。UI / 桥接 / native 都在 :vmp-core。
+    implementation(project(":vmp-core"))
+
+    // ⚠️ androidTest 需要**显式**再声明一次 :vmp-core。
+    // `implementation` 不传递到测试的编译类路径，而这里的测试直接引用
+    // VmpBridge / VmpNative —— 少这一行会以「Unresolved reference」的编译错误出现，
+    // 还算好查；真正坑的是运行期依赖缺失（NoClassDefFoundError）那种形态。
+    androidTestImplementation(project(":vmp-core"))
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

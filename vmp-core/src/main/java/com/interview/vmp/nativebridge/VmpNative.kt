@@ -42,7 +42,7 @@ object VmpNative {
      *
      * ⚠️ 名字与「加载路径」的这一层映射（去掉 `lib` 前缀、去掉 `.so` 后缀）没有编译期
      * 检查，是本仓库 native 接入的经典坑之一。产物名由 CMake 的 `LIB_NAME` 决定，
-     * 见 `vmp-lab/src/main/cpp/CMakeLists.txt`。
+     * 见 `vmp-core/src/main/cpp/CMakeLists.txt`。
      */
     private const val LIB_NAME = "vmp_android"
 

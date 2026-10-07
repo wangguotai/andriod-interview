@@ -32,16 +32,7 @@
 
 ---
 
-## 2. 为什么是独立 module
-
-与 `:ipc-lab` 同一套理由，另外多两条：
-
-1. **加固产物必须与未加固产物并存、同时对拍**。本 Lab 产出独立的
-   `libvmp_android.so`，**不替换** app 既有的 `libimagepipeline.so`。
-   独立 module 让「装不装、卸不卸」互不影响 —— 加固实验失败绝不波及正在用的图片链路。
-2. **它自带 LAUNCHER，是一个可单独安装的 Demo App**（applicationId
-   `com.interview.vmplab`），不挂到主 app 的 `HomeCatalog` —— 与 `:ipc-lab`、
-   `:scroll-event-demo` 一致。
+## 2. 模块结构：三层，两个入口
 
 ```
 rust/vmp/                纯 Rust 虚拟机内核（无 Android 依赖，可 cargo test）
@@ -55,12 +46,56 @@ rust/vmp/                纯 Rust 虚拟机内核（无 Android 依赖，可 car
   src/key.rs             主密钥与各程序 nonce（**不进 .so**，构建期用完即弃）
   ISA.md                 指令集规范（汇编器/VM/生成器三者的唯一契约）
 rust/vmp-android/        JNI 绑定层 → libvmp_android.so
-vmp-lab/                 独立 Demo App（UI + androidTest 对拍与基准）
+vmp-core/                 ★ android library：上面两件的构建接线 + VmpBridge + UI + 布局
+vmp-lab/                  宿主 A：独立可安装 Demo App（LAUNCHER）+ androidTest
+app/                      宿主 B：面试实验室首页入口（HomeCatalog 一条）
 ```
 
 关键点：**算法在字节码里，不在 Rust 代码里**。`src/algorithms/` 看着像算法实现，
 但它的角色是「构建期的字节码生成器」—— `build.rs` 调它产出字节码、加密、再把密文嵌进
 `.so`。发布的 `.so` 里既没有 `algorithms/`，也没有 `asm.rs`。这一点在 §7 用 `nm` 验证。
+
+### 为什么是「library + 两个宿主」而不是「独立 APK」
+
+最初的取舍是独立 module（与 `:ipc-lab` 一致）：**加固产物必须与未加固产物并存、
+同时对拍**，本 Lab 产出独立的 `libvmp_android.so`，不替换 app 既有的
+`libimagepipeline.so`；装/卸互不影响，加固实验失败绝不波及正在用的图片链路。
+
+后来要把 VMP 放进**面试实验室首页**（`HomeActivity`），这就撞上一个硬约束：
+`HomeEntry.activityClass` 的类型是 `Class<out Activity>` —— **首页只能直达本 app 内的
+Activity**，独立 APK 的入口在这个模型里根本表达不了（`:ipc-lab` / `:scroll-event-demo`
+同理，所以它们都不在首页）。
+
+于是改成三层：把实现抽到 `:vmp-core`（library），`:app` 与 `:vmp-lab` 各自依赖：
+
+| | 保留了什么 | 为什么 |
+|---|---|---|
+| `:vmp-core` | native 构建接线 / JNI / VmpBridge / VmpLabActivity / 布局 | 实现只能有一份 |
+| `:vmp-lab` | LAUNCHER + Manifest + androidTest | 隔离性 + 测试归属 |
+| `:app` | `HomeCatalog` 一条 + Manifest 里一条 Activity | 首页可达 |
+
+**两条路都保留是有意的**：
+
+1. `:app` 那份让面试时可以**从首页一路点进去**，这是「放进实验室页面」的诉求；
+2. `:vmp-lab` 那份保留了**可单独安装、单独跑、单独测**的隔离性 —— 加固实验
+   （cargo 交叉编译、JNI 符号、`.so` 装载）失败时，不该影响日常使用的主 app APK。
+   而 androidTest 也放在这里：它们需要装一个带 instrumentation 的 APK，搁在
+   library 里会随依赖传染给 `:app`。
+
+两处共用同一份 UI 与桥接代码，因此不存在「首页那份和 Lab 那份行为不一样」的漂移
+—— 已实测：两条入口都跑出同样 12 组逐位一致的对拍结果。
+
+### ⚠️ 一个真实的代价：ABI 限制会传染
+
+`:vmp-core` 的 native 只编 **arm64-v8a**，而 ABI 限制会**从 library 传染到宿主**，
+于是 `:app` 也必须显式收口（`app/build.gradle.kts` 的 `ndk { abiFilters += "arm64-v8a" }`）。
+
+影响面：本仓库其余 native（`imagepipeline` / `netlab` / `threadhook`）也一起只剩 arm64；
+真机（arm64）与 arm64 模拟器不受影响；**32 位设备将装不上这个 APK**。
+
+这是「把 native 加固代码放进主 app」的**真实代价**，不是可以忽略的细节。
+若要恢复多 ABI：给 `rust/vmp-android` 补对应 rustup target，再删掉那行
+—— `tools/cmake/build_rust_android.cmake` 本身已支持四个 ABI，不需要改工具链。
 
 ---
 
@@ -425,8 +460,10 @@ cargo test -p vmp_android --release --test host_bench -- --ignored --nocapture
 ### 设备 / 模拟器
 
 ```bash
-# 1) 编 APK（会用 cargo 交叉编译出 arm64-v8a 的 libvmp_android.so）
+# 1) 编 APK。:vmp-core 会用 cargo 交叉编译出 arm64-v8a 的 libvmp_android.so，
+#    两个宿主（:vmp-lab 与 :app）共用同一份产物。
 ./gradlew :vmp-lab:assembleDebug :vmp-lab:assembleDebugAndroidTest
+./gradlew :app:assembleDebug          # 首页入口那一份
 
 # 2) 装（真机若开着「USB 安装需确认」，MIUI 需要先在开发者选项里打开「USB 安装」）
 adb install -r -t vmp-lab/build/outputs/apk/debug/vmp-lab-debug.apk
@@ -456,10 +493,16 @@ adb logcat -d | grep -a "System.out"
    （试过在 `@Before` 里用 `startActivitySync` 自动拉前台，**行不通** ——
    它要等主线程 idle，在这个纯计算场景里直接 45 秒超时。见测试里的注释。）
 
-### App 内手动观察
+### 两条入口，同一份实现
 
-`VmpLabActivity` 有四个按钮：**加固状态** / **逐位对拍** / **A/B 对照** / **跑基准**，
-把本节的过程搬到界面上，方便面试时当场指着屏幕讲。
+| 入口 | 怎么进 | 用途 |
+|---|---|---|
+| **面试实验室首页** | 主 app → 实验台 → 「VMP 加固 Lab」 | 面试时从首页一路点进去 |
+| **独立 Demo App** | 桌面图标，或 `am start -n com.interview.vmplab/com.interview.vmp.ui.VmpLabActivity` | 隔离验证、跑 androidTest |
+
+两者都进同一个 `VmpLabActivity`（来自 `:vmp-core`），四个按钮：
+**加固状态** / **逐位对拍** / **A/B 对照** / **跑基准**，把本节的过程搬到界面上，
+方便面试时当场指着屏幕讲。
 
 ---
 

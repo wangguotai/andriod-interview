@@ -1,9 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  :vmp-lab —— VMP 加固实验台，可单独安装的 Demo App。
+
+  ─── 实现全部来自 :vmp-core ───
+  VmpLabActivity / VmpBridge / JNI 与布局都在 :vmp-core 里（一份代码，:app 也在用）。
+  本 Manifest 只做宿主该做的事：声明这个页面属于本 App、并且是 LAUNCHER。
+
+  为什么 Activity 声明不放在 library 里：library 的 Manifest 会 merge 进 :app，
+  在那里声明 LAUNCHER 会让**主 app 多出一个桌面图标** —— 而 :app 只想复用这个页面，
+  不想多开入口。入口的归属是宿主的决定，所以留在宿主 Manifest。
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 不需要任何权限：本 Lab 全部计算在本地、无网络、无存储访问。
-         特意把这一点写下来 —— 「加固 Demo 需要什么权限」本身是个常被追问的点，
-         答案是「零」，加固不改权限模型。 -->
+    <!-- 不需要任何权限：全部计算在本地、无网络、无存储访问。 -->
 
     <application
         android:allowBackup="false"
@@ -13,10 +22,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.VmpLab">
 
-        <!-- 唯一入口。独立 applicationId（com.interview.vmplab），可单独安装/卸载，
+        <!-- 独立 applicationId（com.interview.vmplab），可单独安装/卸载，
              与主 app 及其它 Lab 互不影响。 -->
         <activity
-            android:name=".ui.VmpLabActivity"
+            android:name="com.interview.vmp.ui.VmpLabActivity"
             android:exported="true"
             android:label="VMP 加固 Lab">
             <intent-filter>

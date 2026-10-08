@@ -197,7 +197,143 @@ object StabilityMonitor {
 
     /** 进程退出前的收尾（尽力而为，见 CrashJournal.endSession 的诚实边界） */
     fun onExit(app: Application) {
+        ReportDriver.stop()
         CrashJournal.endSession(app)
+    }
+
+    // ─────────────────────────────────────────────
+    // 上报驱动（⚠️ 这里是"实验版 → 线上版"的那一步）
+    // ─────────────────────────────────────────────
+
+    /**
+     * 统一的**上报驱动**：把 [flush] 挂到"该发的时候"。
+     *
+     * ══════════════════════════════════════════════════════════════════
+     * 为什么必须有它（以及它为什么本该是最先写的一行）
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * 在加这个类之前，全仓**没有任何**定时器/`WorkManager`/`AlarmManager` 调用 `flush`——
+     * 唯一会 `flush` 的是实验页那个「模拟上报」按钮。后果是：
+     *
+     * ```
+     *   采集 → 判定 → 环形缓冲 → ✗ 停在这里
+     * ```
+     *
+     * 也就是**"三通道都装了"的表象掩盖了"数据永远到不了平台"**。
+     * 这与 `INTERVIEW-线上ANR监控方案.md` §1 审出的「周期性上报驱动不存在」
+     * 是**同一个缺口** —— 因为内存模块复用了同一个出口，所以补一次两边都通。
+     *
+     * ══════════════════════════════════════════════════════════════════
+     * 三条纪律（照抄 `CrashJournal` / 采样器的既有判断）
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * 1. **不在主线程跑**：`drainTo` 要遍历事件、跑 sink、可能序列化 ——
+     *    丢到 `ThreadPools.scheduled`（该线程池是治理过的：命名、优先级、
+     *    拒绝策略、队列深度可观测），**绝不** `new Thread` / `Executors` /
+     *    `HandlerThread`（ASM 插件 + lint 会直接拦）。
+     * 2. **周期 + 进后台各一次**：周期保证"一直不开后台也能上"；
+     *    进后台那一次是**关键**——移动端大量会话是"退到后台后再也没回来"，
+     *    不在这时发，这一整个会话的数据就随进程回收一起没了。
+     * 3. **默认关**：与 SIGQUIT 通道、native 归因探针同一纪律。
+     *    自动周期上报会真实消耗资源（唤醒 + IO），必须显式开启。
+     *    实验页有开关，开的那个瞬间起效、关掉立刻停。
+     *
+     * ══════════════════════════════════════════════════════════════════
+     * ⚠️ 本仓库的 upload 是**模拟提交**（刻意如此）
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * 真实上传需要 host/token，把那些写进开仓库的 demo 属于
+     * "演示项泄露成生产配置"。所以这里注入一个**明确标注为模拟**的 upload：
+     * 它**不联网**，只把批次记进 [StabilityReporter.uploadLog] 并打一行 logcat，
+     * 供实验页当场查看"这次提交了什么"（这是它能被验证的前提）。
+     * 接真实平台时替换这一个 lambda 即可：`upload = { platform.send(it) }`。
+     */
+    object ReportDriver {
+
+        private const val TAG_DRIVER = "Stability"
+
+        /** 周期上报间隔。⚠️ 生产口径应可远程下发（见 INTERVIEW §4.1） */
+        const val DEFAULT_INTERVAL_MS = 30_000L
+
+        private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+        private var future: java.util.concurrent.ScheduledFuture<*>? = null
+
+        fun isRunning(): Boolean = running.get()
+
+        /** 累计成功提交的批次数（与 `uploadedCount` 配合，能证明"发过、且没重复发"） */
+        private val batches = java.util.concurrent.atomic.AtomicLong(0)
+        fun batchCount(): Long = batches.get()
+
+        /**
+         * 打开驱动。重复调用是安全的（幂等）。
+         *
+         * @param intervalMs 周期；测试/演示可传小值（如 3s）快速看到效果
+         */
+        fun start(intervalMs: Long = DEFAULT_INTERVAL_MS) {
+            if (!running.compareAndSet(false, true)) return
+            val period = intervalMs.coerceAtLeast(1_000L)
+            future = ThreadPools.scheduled.scheduleWithFixedDelay(
+                { tick("周期") }, period, period, java.util.concurrent.TimeUnit.MILLISECONDS
+            )
+            Log.i(TAG_DRIVER, "上报驱动已开：每 ${period / 1000}s 一次 + 每次进后台一次（模拟提交，不联网）")
+        }
+
+        fun stop() {
+            if (!running.compareAndSet(true, false)) return
+            future?.cancel(false)
+            future = null
+            Log.i(TAG_DRIVER, "上报驱动已关")
+        }
+
+        /**
+         * 触发一次上报（驱动内部用；实验页的"立即上报"按钮也走这里，
+         * 保证"手动"和"周期"走的是**同一段代码**，不会一个能清账另一个不能）。
+         */
+        fun flushNow(reason: String): Boolean =
+            flush { batch -> simulatedUpload(batch, reason) }
+
+        private fun tick(reason: String) {
+            runCatching { flushNow(reason) }
+                .onFailure { Log.w(TAG_DRIVER, "上报驱动本轮失败（下轮继续，事件不会丢）", it) }
+        }
+
+        /**
+         * 进后台时触发一次（由 `MemoryMonitor.onTrimMemory(UI_HIDDEN)` 调用）。
+         *
+         * ⚠️ 驱动**没开**时这里必须 no-op：否则"默认关"就是假话 ——
+         *    用户以为关掉了，但每次退后台仍在偷偷上报。
+         *    "关"的语义必须是**一条都不发**，不是"少发一条"。
+         */
+        fun onEnterBackground() {
+            if (!running.get()) return
+            tick("进后台")
+        }
+
+        /**
+         * **模拟提交**：不联网。
+         *
+         * ⚠️ 返回 true 的语义是"已发送成功"——只有 true 才会清账（从环形缓冲移除）。
+         *    这里返回 true 是**故意的**：好让"上报→清账→模拟出口里能看到"这条链路
+         *    在实验页上完整可验证。**接真实平台时必须换成真实的成败**，
+         *    否则会出现"发送失败但事件被清掉"的数据丢失。
+         */
+        private fun simulatedUpload(batch: List<StabilityReporter.Event>, reason: String): Boolean {
+            // ⚠️ **空批次不算一次提交**。这里必须提前返回，别去动 `batches` 计数器 ——
+            //    否则每 5s 的定时器哪怕一条事件都没有也会把计数往上加，
+            //    于是"已提交 N 批次"变成在数**定时器滴答**而不是在数**数据**。
+            //    （实测踩过：第一条真实事件的日志显示成"批次#2"，
+            //    因为前两次空 tick 已经加过数了。计数器一旦失去意义，
+            //    它就不能再用来回答"到底发出去了没有"。）
+            if (batch.isEmpty()) return true
+            val n = batches.incrementAndGet()   // 先自增再打印，编号与真实批次对齐
+            val byKind = batch.groupingBy { it.kind.name }.eachCount()
+            Log.i(
+                TAG_DRIVER,
+                "[模拟提交:$reason] 批次#$n：${batch.size} 条 | " +
+                    byKind.entries.joinToString(" ") { "${it.key}=${it.value}" }
+            )
+            return true
+        }
     }
 
     /** Demo/测试用：把所有内存态统计清零 */

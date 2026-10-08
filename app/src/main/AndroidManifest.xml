@@ -168,6 +168,16 @@
             android:theme="@style/Theme.MyApplication.AppCompat" />
 
         <!-- ═══════════════════════════════════════════
+             内存监控 Lab —— JVM 堆 / Native / 图形内存 三条观测线
+             统一出口与稳定性模块共用（StabilityReporter）
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.内存.MemoryLabActivity"
+            android:exported="true"
+            android:label="内存监控 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
+
+        <!-- ═══════════════════════════════════════════
              VMP 加固 Lab —— 加密字节码虚拟机 + 逐位对拍 + 基准
              实现来自 :vmp-core（library）；Activity 声明必须留在宿主
              Manifest —— library 里声明会让每个宿主 inherits 这个页面。

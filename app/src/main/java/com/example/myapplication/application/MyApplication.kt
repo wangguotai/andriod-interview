@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import com.example.myapplication.hotfix.HotFix
 import com.interview.net.NetClient
+import com.interview.内存.MemoryMonitor
 import com.interview.稳定性监控.StabilityMonitor
 //import org.koin.core.context.startKoin
 import java.io.BufferedReader
@@ -45,6 +46,25 @@ class MyApplication : Application() {
         //      （getHistoricalProcessExitReasons + 读 trace 可能上百毫秒，
         //        放在 onCreate 里等于直接吃冷启动的 ANR 预算）
         StabilityMonitor.installOnCreate(this)
+
+        // 内存监控（JVM 堆 + Native + 图形内存）：
+        //   ① 注册 ComponentCallbacks2 → 拿到**系统**对整机内存压力的判断（唯一权威口径）
+        //   ② 起 2s 采样器（环形 256 点 ≈ 8.5 分钟窗口）
+        //   ③ 事件走 StabilityReporter（与 ANR/Crash **同一条出口**，不新建管道）
+        // ⚠️ 刻意**不在这里**装两样东西（会改变被测系统的行为，必须显式开启）：
+        //   · native 分配归因探针（memtrace/bytehook）—— 挂在全局 malloc 热路径上
+        //   · 堆直方图 dumpHprofData —— stop-the-world 0.5~2s
+        //   两者的入口都在「内存监控 Lab」页，且"开着"这件事在总览里可见。
+        MemoryMonitor.install(this)
+
+        // 上报驱动（周期 flush + 进后台 flush）：
+        // ⚠️ 库侧（StabilityMonitor.ReportDriver）**默认关**，这是刻意的纪律
+        //    （自动周期上报会真实消耗唤醒 + IO，与 SIGQUIT 通道、native 归因探针同一判断）。
+        //    但**本 App 显式打开它** —— 否则采出来的数据永远到不了出口，
+        //    整个链路是断的（这正是之前审计出的缺口：全仓没有任何东西驱动 flush）。
+        //    intervalMs 用 30s 的生产默认值；实验页可以临时改小观察。
+        // ⚠️ 出口是**模拟提交**（不联网，只在 App 内可查）—— 见 ReportDriver 注释。
+        StabilityMonitor.ReportDriver.start()
 
         // 网络质量感知必须在这里启动，而不是懒加载：
         // 网络切换回调要在**第一次请求之前**就开始收集，否则冷启动后首个请求

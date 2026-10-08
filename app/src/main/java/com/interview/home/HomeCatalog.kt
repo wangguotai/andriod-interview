@@ -65,6 +65,12 @@ object HomeCatalog {
             tag = "stability",
         ),
         HomeEntry(
+            title = "内存监控 Lab",
+            subtitle = "JVM 水位 / Native 归因 / 位图与堆直方图，共用稳定性上报出口",
+            activityClass = com.interview.内存.MemoryLabActivity::class.java,
+            tag = "memory",
+        ),
+        HomeEntry(
             title = "VMP 加固 Lab",
             subtitle = "三算子编译成加密字节码，与原生实现逐位对拍并量出代价",
             // 实现来自 :vmp-core（library）—— 这也是它必须是「本 app 内的 Activity」

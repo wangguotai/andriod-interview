@@ -65,6 +65,12 @@ android {
     }
     buildFeatures {
         compose = true
+        // ─── prefab：把依赖 AAR 里的预编译 .so 暴露给 CMake ───
+        // memtrace（native 内存分配归因）依赖 bytehook 的 .so，而 bytehook 以 AAR
+        // 分发（.so 放在 AAR 的 prefab/ 目录）。不打开这个开关，CMake 侧
+        // `find_package(bytehook)` 会直接报「找不到包」，且错误信息指向 CMake
+        // 而不是依赖 —— 是那种会浪费半小时的错。
+        prefab = true
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.15"
@@ -77,6 +83,21 @@ android {
 
     testOptions {
         unitTests {
+            // ── 把 -Dmem.realHprof=<path> 透传给**测试 JVM** ──
+            // 为什么需要：真实 hprof dump（本项目实测 45 MB）不能进版本库，
+            // 但解析器**必须**在真实 dump 上验证过 —— 手写的迷你 hprof 只能覆盖
+            // "我想到的情形"，真实文件的 9893 个 segment 才会覆盖"我没想到的"。
+            // （第一版解析器正是被真实 dump 抓出来的：ArrayIndexOutOfBounds。）
+            // Gradle 的 -D 只作用于 Gradle 自身，不会自动进测试 JVM，所以这里显式透传。
+            // 不传时该测试自行跳过，对日常构建零影响：
+            //   ./gradlew :app:testDebugUnitTest --tests "*RealDumpTest*" \
+            //       -Dmem.realHprof=/path/to/dump.hprof
+            all { test ->
+                System.getProperty("mem.realHprof")?.let {
+                    test.systemProperty("mem.realHprof", it)
+                }
+            }
+
             // JVM 单测里 android.jar 的方法默认抛「not mocked」。设 true 后返回默认值
             // （Log.v 返回 0、Looper 等返回 null），从而让**依赖 android.util.Log 的
             // 生产代码**也能在宿主 JVM 上被测到 —— 否则测试就得为「能不能打日志」
@@ -188,6 +209,21 @@ dependencies {
     // 抽成 library 而不是在 app 里再抄一份：主页入口要求 Activity 在本 app 内，
     // 但实现只能有一份 —— 否则修一个 bug 要改两处，漂移了也不会报错。
     implementation(project(":vmp-core"))
+
+    // ── Native 内存分配归因（memtrace）的 hook 框架 ──
+    // bytehook：字节跳动的 PLT/GOT hook 实现，以 **AAR + prefab** 分发预编译 .so。
+    //
+    // ⚠️ 版本**必须**是 1.0.10，不能升 1.1.x（实测卡出来的，不是偏好）：
+    //    1.1.x 的 AAR metadata 里 minCompileSdk=37，而本仓库 compileSdk=34
+    //    ⇒ Gradle 依赖解析直接失败，报「requires compileSdk 37」这种
+    //    与内存监控毫无关系的错，容易误判成工程配置坏了。
+    //    1.0.10 实测 minCompileSdk=1，且已带 prefab（含 header）与四个 ABI。
+    //
+    // 为什么不用自己写的 GOT Hook（本仓库 thread_hook.cpp 已有）：
+    //   那个是「1 个符号 × 1 个模块」，而 malloc 归因要「4 个符号 × 所有模块」
+    //   + 新加载 .so 的覆盖 + 递归/并发防护，且处在**分配热路径**上。
+    //   详见 app/src/main/cpp/memtrace.cpp 文件头 §二 的对照表。
+    implementation("com.bytedance:bytehook:1.0.10")
     // 图片加载 Lab：Glide 4.12（降采样教学对象）
     implementation(libs.com.github.bumptech.glide)
     // okhttp 直连：下载"全尺寸原图"用 —— Glide 内部也依赖它，此处显式声明避免隐式传递

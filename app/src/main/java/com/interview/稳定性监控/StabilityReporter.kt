@@ -2,6 +2,7 @@ package com.interview.稳定性监控
 
 import com.interview.thread.ThreadErrorReporter
 import java.text.SimpleDateFormat
+import java.util.ArrayDeque
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -79,6 +80,26 @@ object StabilityReporter {
 
         /** 主线程卡顿时的采样堆栈（由看门狗主动抓取）*/
         MAIN_THREAD_STUCK,
+
+        /**
+         * 内存水位升高（NORMAL→HIGH）。**只在越级时产生**，不是每次采样。
+         * 见 `com.interview.内存.MemoryMonitor` 类注释 §二。
+         */
+        MEMORY_HIGH,
+
+        /** 内存水位到临界（软上限 85%，或 committed 贴到硬上限 95%） */
+        MEMORY_CRITICAL,
+
+        /**
+         * 系统下发的内存压力（`onTrimMemory` 的**压力轴**级别，含 onLowMemory）。
+         *
+         * ⚠️ 与 ANR 的区别：这一条**不是我们算的**，是系统告诉我们的，
+         * 所以它是"为什么这个 App 在特定机型上被杀"的唯一客户端证据。
+         */
+        MEMORY_TRIM,
+
+        /** 周期性的内存趋势聚合报告（有采样率，默认 1/5 会话） */
+        MEMORY_TREND,
     }
 
     /** 归一化事件。字段刻意保持扁平 —— 便于直接映射到 APM 的宽表 */
@@ -128,9 +149,29 @@ object StabilityReporter {
 
     private val totalByKind = java.util.concurrent.ConcurrentHashMap<Kind, AtomicLong>()
 
-    /** 有界环形缓冲：满了丢最旧的。**绝不无界增长**——那本身就是内存泄漏 */
-    private const val RING_CAPACITY = 200
+    /**
+     * 有界环形缓冲：满了丢最旧的。**绝不无界增长**——那本身就是内存泄漏
+     *
+     * ⚠️ 容量从 200 提到 320，直接原因是**新增了内存事件**：
+     *    内存监控会产生 MEMORY_TREND（每次几百~几千字符），
+     *    它与崩溃/ANR 抢同一个缓冲。缓冲满时丢的是**最旧的**——
+     *    如果内存趋势把缓冲刷满，最坏的后果是**丢掉一条崩溃**。
+     *
+     * ⇒ 所以除了扩容，还加了**分类配额**（见 [record]）：任何一类事件最多占
+     *    [PER_KIND_RING_CAPACITY] 条，保证"量大的那一类"吃不掉整个缓冲。
+     *    这是 `INTERVIEW-线上ANR监控方案.md` §2.2 那条「分类配额」在**客户端内存里**
+     *    的对应实现 —— 服务端有配额，客户端内的缓冲同样要有。
+     */
+    private const val RING_CAPACITY = 320
+
+    /** 单类事件在环形缓冲里的上限（保证高优先级类别永远有位置） */
+    private const val PER_KIND_RING_CAPACITY = 96
+
+    /** 模拟提交的镜像批数上限（够看最近几次即可；见 [uploadLog]） */
+    private const val UPLOAD_LOG_CAPACITY = 10
+
     private val ring = ConcurrentLinkedDeque<Event>()
+    private val ringCountByKind = java.util.concurrent.ConcurrentHashMap<Kind, AtomicLong>()
 
     private val mainHandler by lazy { android.os.Handler(android.os.Looper.getMainLooper()) }
 
@@ -192,7 +233,26 @@ object StabilityReporter {
     private fun record(event: Event) {
         totalByKind.computeIfAbsent(event.kind) { AtomicLong() }.incrementAndGet()
         ring.addLast(event)
-        while (ring.size > RING_CAPACITY) ring.pollFirst()
+        ringCountByKind.computeIfAbsent(event.kind) { AtomicLong() }.incrementAndGet()
+        while (ring.size > RING_CAPACITY) {
+            val dropped = ring.pollFirst() ?: break
+            ringCountByKind[dropped.kind]?.decrementAndGet()
+        }
+        // 分类配额：某一类占满上限时，**从该类的头部**淘汰最旧的一条。
+        // ⚠️ 必须从**自己这一类**里淘汰，而不是从环形缓冲头部 ——
+        //    后者会误伤别的类别（正是我们要防的"量大的吃掉量小的"）。
+        val mine = ringCountByKind[event.kind]?.get() ?: 0L
+        if (mine > PER_KIND_RING_CAPACITY) {
+            val it = ring.iterator()
+            while (it.hasNext()) {
+                val e = it.next()
+                if (e.kind == event.kind) {
+                    it.remove()
+                    ringCountByKind[event.kind]?.decrementAndGet()
+                    break
+                }
+            }
+        }
         // ⚠️ 这里**只做入队 + 计数**。不调 sink、不打 logcat、不做任何 IO，
         //    **也不在这里触发发送**。
         //
@@ -223,10 +283,40 @@ object StabilityReporter {
 
     fun snapshot(limit: Int = 50): List<Event> = ring.toList().takeLast(limit)
 
+    /**
+     * **模拟提交的记录**（最近一次 `drainTo` 送出去的那一批）。
+     *
+     * 为什么需要它：`drainTo` 在成功后会**把事件从环形缓冲里移除**（不然会重复上报），
+     * 于是"刚提交了什么"在 `snapshot()` 里**立刻消失** —— 实验页上表现为
+     * "点完上报，事件列表空了"，看起来像丢了。
+     * 这里留一份**只读镜像**（同样有界，只保留最后 [UPLOAD_LOG_CAPACITY] 批），
+     * 用来回答"**这个模拟出口到底收到了什么**"——这是"模拟提交"能被验证的前提。
+     */
+    private val uploadLog = ArrayDeque<List<Event>>()
+
+    /** 最近一次上报批次的条数（0 表示还没提交过） */
+    @Volatile
+    var lastUploadSize: Int = 0
+        private set
+
+    /** 累计已提交事件数（用于证明"提交确实发生了、且不是重复上报"） */
+    private val uploadedTotal = AtomicLong(0)
+
+    fun uploadedCount(): Long = uploadedTotal.get()
+
+    /** 最近若干次提交的批次（新的在后）。只在实验页/排查时读。 */
+    fun uploadLog(): List<List<Event>> = synchronized(uploadLog) { uploadLog.toList() }
+
+    fun clearUploadLog() {
+        synchronized(uploadLog) { uploadLog.clear() }
+        lastUploadSize = 0
+    }
+
     fun countOf(kind: Kind): Long = totalByKind[kind]?.get() ?: 0L
 
     fun reset() {
         ring.clear()
+        ringCountByKind.clear()
         totalByKind.clear()
         counter.set(0)
     }
@@ -253,7 +343,18 @@ object StabilityReporter {
             logToLogcat(event)
         }
         val ok = runCatching { upload(batch) }.getOrDefault(false)
-        if (ok) batch.forEach { ring.remove(it) }
+        if (ok) {
+            batch.forEach {
+                if (ring.remove(it)) ringCountByKind[it.kind]?.decrementAndGet()
+            }
+            // 记下这一批（只读镜像，见 uploadLog 注释）——否则"提交了什么"看不了
+            synchronized(uploadLog) {
+                uploadLog.addLast(batch)
+                while (uploadLog.size > UPLOAD_LOG_CAPACITY) uploadLog.removeFirst()
+            }
+            lastUploadSize = batch.size
+            uploadedTotal.addAndGet(batch.size.toLong())
+        }
         return ok
     }
 
@@ -287,8 +388,8 @@ object StabilityReporter {
 
     fun describe(): String = buildString {
         appendLine("── 统一上报出口 ──")
-        appendLine("采样率：JANK/SLOW_MESSAGE 1/$jankSampleRate；CRASH/ANR 必报")
-        appendLine("环形缓冲：${ring.size}/$RING_CAPACITY（有界，溢出丢最旧）")
+        appendLine("采样率：JANK/SLOW_MESSAGE 1/$jankSampleRate；CRASH/ANR/内存水位 必报")
+        appendLine("环形缓冲：${ring.size}/$RING_CAPACITY（有界，溢出丢最旧；单类上限 $PER_KIND_RING_CAPACITY）")
         appendLine("sink：${if (sink == null) "未接入（仅本地环形缓冲 + logcat）" else "已接入"}")
         appendLine()
         appendLine("── 分类计数 ──")
@@ -300,7 +401,7 @@ object StabilityReporter {
     /** 让事件也能进 logcat，方便 `adb logcat -s Stability` 观察 */
     fun logToLogcat(event: Event) {
         when (event.kind) {
-            Kind.CRASH, Kind.CRASH_NATIVE, Kind.ANR -> android.util.Log.e(TAG, event.oneLine())
+            Kind.CRASH, Kind.CRASH_NATIVE, Kind.ANR, Kind.MEMORY_CRITICAL -> android.util.Log.e(TAG, event.oneLine())
             else -> android.util.Log.w(TAG, event.oneLine())
         }
     }

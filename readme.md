@@ -36,6 +36,13 @@
      > [`稳定性监控/INTERVIEW-稳定性监控.md`](app/src/main/java/com/interview/稳定性监控/INTERVIEW-稳定性监控.md)
      > （ANR 的三条采集通道 + 真机实测的判据/阈值/诚实边界），
      > 配套可跑实验页 `StabilityLabActivity`（见同目录 `README.md`）。
+     >
+     > 2026-10-08 补充：该问题里「**线上如何监控**」的后半段（采集之后的上报管道、
+     > 服务端聚合口径、告警与成本）单独成篇 ——
+     > [`稳定性监控/INTERVIEW-线上ANR监控方案.md`](app/src/main/java/com/interview/稳定性监控/INTERVIEW-线上ANR监控方案.md)。
+     > 内含本次真机新测的数字（ExitInfo 16 条只覆盖 **2h41m**；一条 ANR trace
+     > 未压缩 **196 KB** / gzip **28 KB**），以及审计出的 **4 处接线缺口**
+     > （其中「ExitInfo 回捞结果从未进上报管道」会让线上拿不到权威 ANR 证据）。
 
 ## day 2.23 先应付完工作， 在处理下算法题，之后看自定义View
 

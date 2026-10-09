@@ -3,6 +3,15 @@
 本目录是一个**可跑的**线上稳定性监控实验模块，配套的面试知识文档见
 [`INTERVIEW-稳定性监控.md`](./INTERVIEW-稳定性监控.md)。
 
+⚠️ **采集之后的那一半（上传管道 / 服务端聚合 / 告警 / 成本）另见
+[`INTERVIEW-线上ANR监控方案.md`](./INTERVIEW-线上ANR监控方案.md)** ——
+本文讲"怎么采到"，那篇讲"采到之后怎么办"，并在其中审计出**本模块当前的 4 处接线缺口**：
+① `ExitInfoCollector.collect()` 的结果从未进入 `StabilityReporter`
+（线上拿不到唯一来自系统判定的"真 ANR"证据）；
+② `exit-seen.txt` 的去重台账会被 Set 顺序截断；
+③ 崩溃遗嘱无回收驱动 → 每次冷启动重复上报；
+④ `CrashJournal.beginSession` 的注释与实现不符（注释称"累计不干净退出次数"，实现拷的是上次会话开始时间）。
+
 实验页入口：`StabilityLabActivity`
 （`com.example.myapplication/com.interview.稳定性监控.StabilityLabActivity`），
 已登记在首页目录。所有 `TAG`：`StabilityMonitor / Stability / AnrMonitor / JankMonitor / MainThreadSampler / CrashMonitor`。

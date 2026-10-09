@@ -13,18 +13,16 @@ find_library(android-lib android)
 target_link_libraries(threadhook ${log-lib} ${android-lib} dl)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Rust 库注册
+# anrsignal：通道 4 —— 拦截 SIGQUIT（ANR 信号）
 #
-#   1) imagepipeline：图像流水线（纯算法 kernel + JNI 绑定层）
-#   2) netlab：传输实验（纯逻辑 kernel + JNI 绑定层）
-#
-# netlab-android 额外声明 netlab 为增量依赖：改 netlab 的 src 也要触发重编，
-# 否则会出现「改了 kernel 但 .so 没更新」的假绿 —— 这正是 GLOB 依赖存在的意义。
-# 注意：netlab-android 的 cargo 构建会**一起**把 netlab 编好（它是 path 依赖），
-# 所以不需要单独为 netlab 这个 rlib 注册一个 CMake 目标。
+# 与 threadhook 分开成独立 ABI 是有意的：
+#   · threadhook 是「线程治理」的 hook，装错会改变线程创建行为；
+#   · anrsignal 是「ANR 取证」的 hook，装错会拖慢系统 dump trace（最长 20s）。
+#   两者失败后果不同，共用一个 .so 会让 Java 侧的优雅降级变得模糊
+#   （loadLibrary 成功 ≠ 两者都能用）。分开后任一侧失败都能独立降级。
 # ─────────────────────────────────────────────────────────────────────────────
-add_rust_android_library(imagepipeline_android rust/android imagepipeline_android rust/imagepipeline)
-add_rust_android_library(netlab_android rust/netlab-android netlab_android rust/netlab)
+add_library(anrsignal SHARED anr_signal_hook.cpp)
+target_link_libraries(anrsignal ${log-lib})
 
 # ─────────────────────────────────────────────────────────────────────────────
 # memtrace：Native 内存分配归因（hook malloc/free/calloc/realloc + 栈回溯）
@@ -47,3 +45,17 @@ find_package(bytehook REQUIRED CONFIG)
 
 add_library(memtrace SHARED memtrace.cpp)
 target_link_libraries(memtrace ${log-lib} dl bytehook::bytehook)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Rust 库注册
+#
+#   1) imagepipeline：图像流水线（纯算法 kernel + JNI 绑定层）
+#   2) netlab：传输实验（纯逻辑 kernel + JNI 绑定层）
+#
+# netlab-android 额外声明 netlab 为增量依赖：改 netlab 的 src 也要触发重编，
+# 否则会出现「改了 kernel 但 .so 没更新」的假绿 —— 这正是 GLOB 依赖存在的意义。
+# 注意：netlab-android 的 cargo 构建会**一起**把 netlab 编好（它是 path 依赖），
+# 所以不需要单独为 netlab 这个 rlib 注册一个 CMake 目标。
+# ─────────────────────────────────────────────────────────────────────────────
+add_rust_android_library(imagepipeline_android rust/android imagepipeline_android rust/imagepipeline)
+add_rust_android_library(netlab_android rust/netlab-android netlab_android rust/netlab)

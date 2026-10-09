@@ -274,6 +274,34 @@ class StabilityLabActivity : AppCompatActivity() {
             )
         }
 
+        // ═══════ 通道 4：SIGQUIT ═══════
+
+        bind(R.id.btn_sigquit_install) {
+            emit(
+                "【通道 4：拦截 SIGQUIT】\n" +
+                        "⚠️ 本模块是本仓库**唯一一处主动去抢系统既有行为**的探针，所以默认不装。\n\n" +
+                        "它做三件事（少一件就是「假成功」）：\n" +
+                        "  ① 解除 SIGQUIT 屏蔽（pthread_sigmask）—— 否则 sigaction 收不到任何信号\n" +
+                        "  ② handler 里只做 write(pipe) + tgkill 转发，重活推到独立线程\n" +
+                        "  ③ ★ 把信号**再转发给 SignalCatcher** —— 漏了这步，AMS 会一直等不到\n" +
+                        "     本进程写堆栈，直到 20s 超时才继续（ANR 弹窗慢 20s，trace 也可能不完整）\n\n" +
+                        "为什么不能简单 sigaction 了事：SIGQUIT 在 zygote 里就被 Block 了，\n" +
+                        "唯一的所有者是 ART 的 SignalCatcher 线程（它用 sigwait 同步等）。\n" +
+                        "信号只会投递给「不阻塞它」的那一个线程 —— 所以我们先解除屏蔽抢过来，\n" +
+                        "再还回去。\n\n" +
+                        "⚠️ 收到 SIGQUIT ≠ 发生 ANR：别的进程 ANR 时我们会被顺带 dump，\n" +
+                        "任何人也能 kill -3 我们。所以本通道做二次判定：\n" +
+                        "   确认 ANR = 本进程被 AMS 标记为 NOT_RESPONDING（系统口径）\n" +
+                        "   自己给自己发的信号 → 直接否掉\n" +
+                        "判为误报的**不会**进上报管道（否则会污染平台的 ANR 率）。"
+            )
+            emit(AnrSigquitChannel.describeInstall())
+        }
+
+        bind(R.id.btn_sigquit_stats) {
+            emit("【通道 4 读数】\n" + AnrSigquitChannel.describe())
+        }
+
         // ═══════ Crash ═══════
 
         bind(R.id.btn_crash_bg) {

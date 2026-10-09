@@ -366,6 +366,7 @@ object StabilityMonitor {
         appendLine("  通道1 ExitInfo：${if (android.os.Build.VERSION.SDK_INT >= 30) "已回捞 ${lastExitInfo.size} 条（新增 ${lastExitInfo.count { it.isNew }}）" else "不可用（API<30）"}")
         appendLine("  通道2 哨兵：运行中（每 1s 探测，连续 2 轮无响应判定）")
         appendLine("  通道3 Looper 旁听：已挂（阈值 500ms）")
+        appendLine("  通道4 SIGQUIT 拦截：${AnrSigquitChannel.shortStatus()}（实验通道，默认不装）")
         appendLine("  卡住时主线程等待点：${AnrMonitor.lastBlockSite() ?: "（尚未采到）"}")
         appendLine()
         appendLine("── 主线程采样 ──")

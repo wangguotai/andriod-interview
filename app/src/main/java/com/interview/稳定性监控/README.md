@@ -40,15 +40,17 @@
 
 ---
 
-## 二、三条采集通道
+## 二、采集通道
 
 ```
 通道1  ApplicationExitInfo 回捞   ← 权威 + 带 trace，但延迟（只能下次启动拿）+ 可能没有 trace
 通道2  哨兵看门狗                  ← 及时，但只是估算（实测 13000ms vs 真实 15000ms）
 通道3  Looper 旁听                 ← 便宜，只有单条消息粒度
+通道4  拦截 SIGQUIT（native）      ← 当次当场 + 系统判据，但**会抢系统行为**，默认不装（见 2.5）
 ```
 
-`AnrMonitor.kt` 里三者是**并列**的，`StabilityMonitor.installOnCreate` 会把它们都装上。
+通道 1/2/3 在 `AnrMonitor.kt` 里是**并列**的，`StabilityMonitor.installOnCreate` 会把它们都装上。
+通道 4 是**实验通道**，只在实验页手动安装。
 
 ### 通道 1 的两个关键坑（实测）
 
@@ -68,6 +70,113 @@
 
 阻塞主线程 15s + 用 `input tap` 持续注入触摸，让 InputDispatcher 真的在等我们。
 注入坐标刻意落在**触控区（按钮带）**——落在输出区不会消费触摸，也就触发不了 ANR。
+
+### 2.5 通道 4：拦截 SIGQUIT（`AnrSigquitChannel` + `cpp/anr_signal_hook.cpp`）
+
+**这是本仓库唯一一处主动去抢系统既有行为的探针**，因此刻意不接进
+`StabilityMonitor.installOnCreate`，只在实验页手动装。
+
+```
+主线程                     signal handler                 dumper 线程（native）
+  install()
+   ├ 缓存 SignalCatcher tid（遍历 /proc/self/task）
+   ├ 建 pipe
+   ├ pthread_sigmask(UNBLOCK, SIGQUIT)   ← ① 不解屏蔽，sigaction 收不到任何信号
+   └ sigaction(SIGQUIT, handler)
+
+                         系统发来 SIGQUIT
+                              │ write(pipe, 16B)     ← 只允许 async-signal-safe
+                              │ tgkill(SignalCatcher)← ★ ② 不转发，AMS 等到 20s 超时
+                              └─────────▶ read() 唤醒
+                                          └─▶ JNI 回调 Java（判定/抓栈/上报都在这）
+```
+
+三个必须做对、少一个就是「假成功」的点：
+
+| | 不做的后果 |
+|---|---|
+| ① `pthread_sigmask(SIG_UNBLOCK)` | SIGQUIT 在 zygote 就被 Block，唯一所有者是 ART 的 SignalCatcher 线程（走 `sigwait`）。**信号只投递给不阻塞它的那个线程** ⇒ handler 永远收不到 |
+| ② `tgkill` 转发回 SignalCatcher | 系统 dump 堆栈的流程断掉，**AMS 一直等不到我们写 trace，直到 20s 超时才继续**（ANR 弹窗慢 20s、`/data/anr` trace 可能不完整） |
+| ③ 二次判定（不是修复不完整） | 收到 SIGQUIT **≠** 发生 ANR：别的进程 ANR 时我们会被顺带 dump；任何人也能 `kill -3` 我们 |
+
+判定纪律（**误报绝不进上报管道**，否则会污染平台的 ANR 率）：
+
+```
+确认 ANR = 本进程被 AMS 标记为 NOT_RESPONDING（getProcessesInErrorState，公开 API）
+自报信号（senderPid == 自己）→ 一律否掉
+同一次 ANR 的后续信号 → 按 20s 窗口复用结论，不重复上报
+```
+
+#### ⚠️ 实测发现（Redmi K40 / Android 12）：这是一个「先发信号、后打 flag」的顺序问题
+
+**本通道最关键的一条实测结论**，也是实现上唯一无法靠读源码想当然的地方：
+
+```
+一次真 ANR 收到 5 条 SIGQUIT（system_server pid=1901，si_code=SI_QUEUE）：
+  第 1 条  → 判定**非 ANR**（flag 还没打上）
+  第 2 条  → 判定非 ANR
+  第 3 条  → 判定非 ANR
+  第 4 条  → 距第 1 条约 12s → 才第一次读到 NOT_RESPONDING → 确认 ANR ✅
+  第 5+ 条 → 命中复用窗口，不重复上报
+```
+
+原因在 AMS 的流程：`appNotResponding()` 是
+**先 `dumpStackTraces()`（发 SIGQUIT）→ 再 `makeAppNotRespondingLocked()`（打 flag）→ 弹框**。
+
+⇒ **只采样一次的实现，会在每一次真 ANR 上都漏掉那条最关键的信号**
+（恰恰是系统 dump 我们的那一条）。若某 ROM 只发一次 SIGQUIT，单次采样就是 100% 漏报。
+所以必须**有界轮询等 flag**：窗口 `POLL_WINDOW_MS = 20s`
+（依据是源码常量 `dumpStackTraces()` 里的 `remainingTime = 20 * 1000`，不是猜的），
+实测 **22 次轮询 ≈ 5.5s** 就等到了。代价写在这里：**上报天生滞后最多 20 秒**
+——「及时」是通道 2 哨兵的职责，「权威确认」才是本通道的职责。
+
+**实测已确认的整条链路**（真机，同一台）：
+
+| 环节 | 证据 |
+|---|---|
+| handler 收到系统信号 | `收到 SIGQUIT：sender pid=1901 code=-1(SI_QUEUE(sigqueue))` |
+| 转发 SignalCatcher 生效 | logcat：`Signal Catcher … reacting to signal 3` + `Wrote stack traces to tombstoned`，**无 20s 停顿** |
+| 系统真的判定 ANR | `ActivityManager: ANR in com.example.myapplication`；系统弹出「没有响应」框；`dumpsys window lastanr` 有记录 |
+| 二次判定正确 | 5 条信号 → **1 条** `Kind.ANR`（另 4 条复用），事件流水里 `ANR 2`（通道 2 一条 + 通道 4 一条） |
+| 误报过滤 | `run-as … /system/bin/kill -3 <pid>`（外部进程发、当时无 flag）→ 判为**非 ANR**，不进上报管道 |
+
+⚠️ 另有两个**只有真机才能发现**的陷阱（都已固化在代码里）：
+
+1. **`/proc/<pid>/task/<tid>/comm` 读出来是 `Signal Catcher`（带空格）。**
+   按资料里常见的写法只匹配 `SignalCatcher` 会**找不到线程** —— 而后果是
+   「有拦截、没转发」，会拖慢系统取证最多 20s。现在按「去掉空白后比较」匹配。
+2. **adb shell 的 uid 发不了 `kill -3`**（`Operation not permitted`），
+   验证必须用 `adb shell run-as <pkg> /system/bin/kill -3 <pid>`（App 自己的 uid）。
+
+#### 已知缺口（会漏报）
+
+AM 侧 `SilentAnr`（后台 ANR）与部分 ROM 的「闪退 ANR」**直接 kill、不打 `NOT_RESPONDING` 标记**，
+本通道判不出来（微信 Matrix 用「20s 窗口轮询 flag」也解决不了这一类）。
+⇒ **权威口径仍然是通道 1**，通道 4 是补充。
+
+**实现踩到的两个坑（都已固化在代码注释里）**：
+
+1. **结构体成员不能叫 `si_pid` / `si_uid` / `si_code`。** 它们是
+   `<asm-generic/siginfo.h>` 里的宏（`#define si_pid _sifields._kill._pid`），
+   写成成员后 `p.si_pid` 会被展开成 `p._sifields._kill._pid` → 编译报
+   `member reference base type 'int32_t' is not a structure or union`。
+   （编译期就暴露，但错误信息指向 siginfo.h，容易误判成头文件用法有问题。）
+2. **JNI 边界必须在 ASCII 包下。** 导出符号形如
+   `Java_<包名下划线化>_<类名>_<方法名>`，而 C++ 标识符不允许非 ASCII ——
+   所以 JNI 声明层落在 `com.interview.anrsignal.AnrSigquitHook`，
+   业务层仍在中文包 `com.interview.稳定性监控`，中间由这一个类隔开。
+
+**怎么验（实验页按钮 + adb）**：
+
+| 操作 | 预期 |
+|---|---|
+| 「通道4:SIGQUIT」 | 显示读数：catcherTid 是否找到、转发开关状态 |
+| 「⚠真ANR(15S)」 | 读数 `handler 命中` 增加；`dumpsys window \| grep lastanr` 有记录；系统弹「无响应」框；**事件流水只多 1 条 ANR** |
+| `adb shell run-as <pkg> /system/bin/kill -3 <pid>` | 判为**非 ANR**（外部发送但当时无 flag），**不出现在事件流水** |
+| 「事件流水」 | `ANR` 计数 = 通道 2 哨兵 1 条 + 通道 4 **1 条**（证明没被 5 条信号放大） |
+
+⚠️ 本机 `ndk.abiFilters = arm64-v8a` ⇒ 32 位设备/非 arm64 模拟器上通道 4
+必然不可用（`loadLibrary` 失败→优雅降级），此时通道 1/2/3 完全不受影响。
 
 ---
 
@@ -233,6 +342,7 @@ override fun onPause()  { StabilityMonitor.flushJank("本页"); JankMonitor.stop
 | LOOPER慢消息1.5S | Looper printer 的粒度 | 消息级监控 |
 | ANR探针说明 / 自报ANR | 看门狗原理；self ANR（**无全量 trace**） | ANR 三通道 |
 | ⚠真ANR(15S) | 真 ANR（阻塞 + 注入触摸） | **ANR 判据** |
+| 通道4:SIGQUIT / 通道4读数 | 安装 native SIGQUIT 拦截 + 二次判定读数 | 通道 4（2.5 节） |
 | EXITINFO回捞 | `ApplicationExitInfo` 回捞 + trace 摘要 | 通道 1 |
 | TRACE解析(样本) | `AnrTraceParser` 三个分支（文本 / 二进制 / 被裁剪） | trace 解析 |
 | 崩溃遗嘱 | 看 `CrashJournal` 的 pending 状态 | 上报可靠性 |
@@ -262,6 +372,22 @@ override fun onPause()  { StabilityMonitor.flushJank("本页"); JankMonitor.stop
    对照：未被排除的 `ThreadMisuseScenarios` / `NetLabActivity` 等已被改写（全产物共 8 个类）。
    ⚠️ 但插件源码里「className 是斜杠形式」的注释与实际行为**不符**，
    属**误导性注释**（容易让后来者据此推导出"排除失效"的错误结论，本次就差点如此）。
+8. ~~通道 4（SIGQUIT）未做真机验证~~ **已实测（Redmi K40 / Android 12）**：
+   handler 能收到系统发的 SIGQUIT（`sender=system_server(1901), SI_QUEUE`）、
+   转发后 ART 正常 `Wrote stack traces to tombstoned`（**无 20s 停顿**）、
+   系统侧确实记了 `ANR in com.example.myapplication`、5 条信号只产出 **1 条** `Kind.ANR`。
+   ⚠️ 但仍有未验证项：① 只有这一台设备/这一个 ROM（MIUI 12，Android 12）；
+   ② **没有验证「不转发时是否真的会慢 20s」的对照实验**（该结论来自微信 Matrix 原文，
+   本仓库只验证了「转发后一切正常」这一半）；③ 多 ABI 未覆盖（见第 10 条）。
+9. **通道 4 会漏报**：后台 ANR（`SilentAnr`）与部分 ROM 的「闪退 ANR」不打
+   `NOT_RESPONDING` 标记，本通道判不出来。**上报还会滞后最多 20s**
+   （等 flag 的有界窗口，见 2.5 节）。权威口径仍是通道 1。
+10. **通道 4 本机只有 arm64-v8a**（`ndk.abiFilters` 收口所致），
+   非 arm64 设备上 `loadLibrary` 失败 → 优雅降级，通道 1/2/3 不受影响。
+11. **`Signal Catcher` 的线程名不可想当然**：实测 `/proc/<pid>/task/<tid>/comm`
+   读出来是 **`Signal Catcher`（带空格）**，按资料里常见的 `SignalCatcher` 只匹配一种
+   会找不到线程 → 「有拦截没转发」→ 拖慢系统取证最多 20s。
+   现在按「去掉空白后比较」匹配，但这属于**跨 ROM 需复核**的实现细节。
 
 ### 依赖与环境约束
 
@@ -271,6 +397,8 @@ override fun onPause()  { StabilityMonitor.flushJank("本页"); JankMonitor.stop
 - ASM 插件 `enableUnify = true` 会把裸 `new Thread` 改写成 `UnifiedThread`，
   所以看门狗这类"需要常驻独占"的线程**必须**走
   `ThreadPools.dedicatedThread(...)`（正规出口），不能裸 `new`。
+  （通道 4 的 native dumper 线程不在这个约束内：它由 `pthread_create` 创建，
+  不经过 `java.lang.Thread`。）
 
 ### 遗留的过时/有缺陷实现（保留原因：证明此路不通）
 

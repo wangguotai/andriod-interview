@@ -195,7 +195,71 @@ Android 12，滚动期间自动加载了 7 次，每次 +20 张）。app 侧帧�
 - Perfetto：需要归因、看 CPU 调度、看 RV 埋点时用。
 - Layout Inspector：看 view 树深度与测量耗时（层级优化）。
 
-## 关联
+---
+
+# heapprofd：native 堆分配剖析（内存归因线）
+
+回答另一个问题：**native 内存涨了，到底哪行代码要的？**
+和滚动线的工具形态一致（cfg + 一条命令的脚本），但目标是
+**内存 Lab 的按钮负载**，且脚本自带自动点按编排。
+
+```
+tools/perfetto/
+├── heapprofd.cfg         # 抓取配置模板（纯 ASCII！坑②：设备端解析器吃不了 UTF-8 注释）
+└── record-heapprofd.sh   # 选设备 → 验配置 → 抓取 → 自动点按 → 拉回 → 健康检查 → 出报告
+```
+
+## 最快用法
+
+```bash
+# 交互：脚本起好 trace 后自己在屏幕上操作，30s 自动停
+tools/perfetto/record-heapprofd.sh -p com.example.myapplication
+
+# 无人值守对拍：t=8s 装归因探针，t=15s 点「造 NATIVE 负载」（内存 Lab 页）
+tools/perfetto/record-heapprofd.sh -s emulator-5554 \
+    --tap "539 791" @8 --tap "201 917" @15 -d 50 --analyze
+
+# 只分析已有 trace
+tools/perfetto/record-heapprofd.sh --analyze-only tools/perfetto/out/xxx.perfetto
+```
+
+坐标用 `uiautomator dump` 现取（不同设备/滚动位置会变）。点按全部拼成**一条
+设备侧序列**挂设备时钟 —— 宿主侧两个进程各 sleep 会漂移几十秒（坑⑤）。
+
+## 脚本里的六个实测坑（都在真机/模拟器踩过，详见脚本头注释）
+
+1. 手测两台设备（Android 12 真机、Android 16 模拟器）的 `HeapprofdConfig`
+   都**没有 `target_cmdline`** —— 手写配置只能 pid 附加（脚本自动降级并打印原始报错）。
+2. 设备端 pbtxt 解析器吃不了 UTF-8 注释和单行嵌套 —— cfg 模板必须纯 ASCII、一行一字段。
+3. 客户端共享内存环默认很小，突发分配**静默丢数据**（`heapprofd_buffer_overran`）——
+   必须 `shmem_size_bytes=16MB` + `block_client=true`。
+4. ⚠️ **MIUI 的 SELinux 拒绝 heapprofd 读 App 文件 ⇒ App 自己 .so 里的栈帧无法
+   unwind ⇒ 样本整个丢弃**（框架分配不受影响）。判别：`adb logcat -d | grep heapprofd`
+   出现 `avc: denied` 即中招。此时归因 App native 代码用本仓 memtrace（bytehook）。
+5. 抓 trace 和点按钮必须共用设备时钟（一条 `adb shell "sleep N; input tap …"`）。
+6. 模拟器闲置十几分钟屏幕会灭，`input tap` 白点 —— 抓之前 `svc power stayon true`。
+
+## 读数口径
+
+- **大于采样间隔**（默认 4KB）的分配：确定性精确记录（32×1MB 会精确记成
+  33,554,432 B / 32 objs）；**小分配是外推估计**，别当精确值用。
+- 每张 dump（默认 5s 一张）是一个**窗口增量**；`size` 为负 = 窗口内释放。
+- 表：`heap_profile_allocation`（账）→ `stack_profile_callsite/frame/mapping`（栈），
+  老版 trace_processor 无 `allocation_size` 列，用 `sum(size)/sum(count)`。
+- App 自己 .so 的帧常是**无名**的（APK 里 strip 过，内部函数不在 .dynsym）——
+  拿 `stack_profile_frame.rel_pc` 走 `tools/native-mem-symbolize.sh` 的离线符号化流程。
+
+对拍结论与原始数字（heapprofd vs memtrace/bytehook、真机 SELinux 边界）：
+**内存方案文档 §3.6 + 附录 M14** ——
+[`app/src/main/java/com/interview/内存/INTERVIEW-线上内存监控方案.md`](../../app/src/main/java/com/interview/内存/INTERVIEW-线上内存监控方案.md)。
+
+## 关联（heapprofd 线）
+
+- 方案与对拍：内存方案文档 §3.6（选型/机制差异/计数差 2 的解释）+ 附录 M14（原始数字）。
+- 离线符号化：[`../native-mem-symbolize.sh`](../native-mem-symbolize.sh)。
+- heap_profile 官方文档：<https://perfetto.dev/docs/data-sources/native-heap-profiler>
+
+## 关联（滚动卡顿线）
 
 - **面试向总结（五步排查法 + 本案例口述版）**：[`INTERVIEW-perfetto.md`](INTERVIEW-perfetto.md)
 - 判据与结论的源码依据：`app/src/main/java/com/interview/image/NOTES-glide-source.md`

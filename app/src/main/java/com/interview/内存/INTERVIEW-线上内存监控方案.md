@@ -324,6 +324,47 @@ site#0 bytes=33554432(32.00 MB) count=32 peak=32.00 MB frames=4
    所以脚本对这种情况**明确标注"需 symbol file"，不猜**。
    要归因的是**自己代码**的分配（那才是可改的部分），系统库帧只提供上下文。
 
+### 3.6 与 heapprofd 对拍：两个**机制正交**的工具，同一答案（M9）
+
+自证可信的最后一环：拿一个**机制上完全不同**的系统级工具当独立 oracle。
+选 Perfetto 的 heapprofd —— 它 hook 的是 **MallocDispatch（分配器入口，bionic 层）**，
+我们 hook 的是 **PLT/GOT（调用方入口，链接器层）**；它用 FP 链 unwind 全栈，
+我们用 `module+offset` 离线符号化。两层视角没有共享代码路径，错也错不到一起去。
+
+实测（模拟器，同一进程、同一次点击、两个探针同时在线，原始数字见附录 M9）：
+
+| | heapprofd（MallocDispatch 层） | memtrace / bytehook（PLT 层） |
+|---|---|---|
+| 归因到 | `malloc@libc ← libmemtrace+0x17154 ← allocBlocksNative ← … ← 按钮回调`（81 帧全栈，**跨 Java/native**） | site#0：`my_malloc → allocBlocksNative` |
+| 字节数 | **33,554,432 = 32 × 1MB，精确** | 31,457,280 = 30 × 1MB |
+| 计数 | **32 / 32** | 30 / 32（`lossy: skippedContended=195`） |
+| `libmemtrace+0x17154` 离线符号化 | → `my_malloc @ memtrace.cpp:431` | 同一函数（§3.5 流程） |
+
+三点结论：
+
+1. **调用点和单块大小完全一致** —— 两套机制把同一批分配指到同一行代码，
+   这是对本模块归因正确性最强的外部证据。
+2. **计数差 2 有账可查**：heapprofd 客户端在线时进程分配流量大增
+   （探针存活期 `seenAllocs≈118 万`），`my_malloc` 的**有限自旋拿锁**
+   （§3.2 纪律 ③）在竞争下丢账 —— `skippedContended=195` 计数器精确记录了这个损失类。
+   heapprofd 侧配了 `block_client=true`（宁可阻塞不丢），所以它是 32/32。
+   **这不是 bug，是两边各自声明的取舍**：我们选"绝不阻塞业务线程"，它选"绝不丢样本"。
+3. **口径差异要心里有数**：heapprofd 对**大于采样间隔**（默认 4KB）的分配是
+   确定性精确记录，小分配是外推估计；memtrace 是 `≥8KB` 全采、`[64B,8KB)` 抽 1/256
+   （§八 边界 2）。对拍大分配可信，对拍小分配两边都是估计值。
+
+⚠️ **真机边界（重要）**：在 Redmi K40（Android 12 / MIUI user build）上，
+heapprofd **不能**用来归因 App 自己的 native 代码 —— MIUI 的 SELinux 拒绝
+heapprofd 守护进程读 App 文件（`avc: denied { search } … scontext=u:r:heapprofd:s0
+tcontext=…app_data_file`），栈帧一旦落进 App 自己的 `.so` 就无法 unwind，
+**样本被整个丢弃**：实测框架分配（8×1MB 位图，栈全在系统库）能记到，
+App JNI 的 32×1MB **一条都没有**。此时自研 hook + 离线符号化反而是**唯一**能用的
+native 归因路径 —— 这是本模块存在于"线上"场景的又一个理由。
+
+工具：[`tools/perfetto/record-heapprofd.sh`](../../../../../../../tools/perfetto/record-heapprofd.sh)
+（一条命令：选设备 → 验配置 → 抓取 → 自动点按 → 拉回 → 健康检查 → 出报告；
+脚本头部沉淀了六个实测坑，含上面的 SELinux 边界与判别方法）。
+
 ---
 
 ## 四、Java 归因：自研 hprof 直方图解析器
@@ -657,14 +698,19 @@ trim / 水位是纯数值；页面标识来自 `Activity` 类名（**不含**用
    失败重试与退避。这三项是上生产的必要条件（见 §九 待办 1~2）。
 2. ⚠️ **native 归因是有损采样**（`≥8KB` 全采、`[64B,8KB)` 1/256、拿不到锁跳过）。
    它回答"大头在哪"，**不回答**"有没有漏 200 KB"。
+   锁竞争丢账**实测可见**：与 heapprofd 双探针对拍时 32 笔 1MB 丢 2 笔
+   （`skippedContended=195`，M9）—— 损失有计数器兜底，但**计数确实会偏低**。
 3. ⚠️ **Java 直方图只有"类 → 数量/字节"，没有引用链**。它指向"数量异常的**种类**"，
    读不出"数量正常但没人放开的**循环引用**"（那需要支配树，是 MAT / Shark 的领域）。
 4. ⚠️ **斜率不是泄漏的证明**。它只给出"值得看一眼"。真正的结论需要
    **多窗口确认**（连续三个窗口都 `LEAK_SUSPECT` 且无 trim 降级）+ 前台/页面前缀归因。
 5. ⚠️ **系统库帧需要匹配的 symbol file** 才能符号化，线上拿不到；只能标注。
 6. ⚠️ **`BitmapTracker` 恒 ≤ 系统 graphics**，差额是信息不是 bug。
-7. ⚠️ **本文所有数字来自模拟器**（Android 16 / arm64 / **scudo** 分配器）。
+7. ⚠️ **本文除 M9 真机部分外，所有数字来自模拟器**（Android 16 / arm64 / **scudo** 分配器）。
    真机（如 dlmalloc/其它厂商定制）上 `malloc_info` 的行为可能不同，需重测。
+   真机侧已实测的一条：**MIUI user build 上 heapprofd 无法归因 App 自己的 .so**
+   （SELinux 拒绝读 App 文件 ⇒ unwind 失败 ⇒ 样本丢弃，M9）—— 跨工具验证
+   在厂商 ROM 上要先确认这个前提，别把"工具看不见"当成"内存不存在"。
 8. ⚠️ **`smaps` 级映射聚合尚未独立成组件**（目前 native 走
    `getNativeHeapAllocatedSize` + `nativePss` + `VmRSS` 三层口径）。
    要做"到底哪个 .so / 哪段映射在涨"，需要逐行解析 `/proc/self/smaps`。
@@ -802,7 +848,34 @@ logcat： 上报驱动已开：每 5s 一次 + 每次进后台一次（模拟提
 
 ### M12 — bytehook 打包去重（§3.1 的风险验证）
 ```
-unzip -l app-debug.apk | grep '\.so$'
+unzip -l app-debug.apk | grep '\.so
+
   lib/arm64-v8a/libmemtrace.so   238656
   lib/arm64-v8a/libbytehook.so    63520   ← 只有一份（prefab + jni/ 已正确合并）
+```
+
+### M14 — 与 heapprofd 对拍（§3.6 的原始数字）
+```
+【模拟器 · 同进程同点击 · 双探针在线】Android 16 / arm64 / debuggable / user build
+trace：   tools/perfetto/out/heapprofd-emu-paired.perfetto（334,477 B，50s，dump_interval=5s）
+heapprofd：dump#4 窗口净 +33,767,004 B / 66 objs
+          Top 调用点 = 33,554,432 B / **32 objs**（= 32×1MB 精确；>4KB 采样间隔 ⇒ 确定性记录）
+          栈（81 帧，跨 Java/native）：malloc@libc ← libmemtrace+0x17154(无名帧)
+              ← Java_...allocBlocksNative ← art JNI ← MemTraceNative.allocBlocks
+              ← MemoryAllocTracker.allocateNativeDemo ← MemoryLabActivity 按钮 lambda
+memtrace： site#0 = 31,457,280 B(30.00 MB) / 30 calls / frames=4
+          lossy: skippedContended=195 freeSkipped=5667 unknownFree=1147291
+          （探针存活期 seenAllocs=1,180,887 —— heapprofd 客户端在场，锁竞争丢 2 账）
+符号化：  libmemtrace+0x17154 → my_malloc @ memtrace.cpp:431（未 strip 构建产物 + llvm-symbolizer）
+          其余无名帧 → my_calloc / my_realloc / dumpMallocInfo（全部是我们自己的钩子）
+
+【真机 Redmi K40 · Android 12 / MIUI user build】heapprofd 的平台边界
+配置：   pid 附加（该机 HeapprofdConfig 无 target_cmdline）+ shmem 16MB + block_client
+点击：   32×1MB native（10:28:04.8，窗口内 ✓）+ 8×1MB 位图（10:28:14.9，窗口内 ✓）
+结果：   位图被记到（calloc@libc / 8 objs / 8,388,608 B，栈全在系统库 ⇒ 可 unwind）
+          App JNI 的 32×1MB **一条都没有**；stack_profile_mapping 里无 base.apk/libmemtrace
+原因：   logcat: avc: denied { search } for name="com.example.myapplication"
+          scontext=u:r:heapprofd:s0 tcontext=u:object_r:app_data_file:s0（SELinux 拒绝读 App 文件）
+          ⇒ 栈帧落在 App 自己 .so 的分配 unwind 失败 ⇒ 样本整个丢弃
+结论：   MIUI 真机上 heapprofd 不能当 App native 归因 oracle；本模块（bytehook+离线符号化）不受影响
 ```

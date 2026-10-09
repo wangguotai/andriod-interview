@@ -271,6 +271,15 @@ liveBytes 33.05 MB  vs  mallinfo2.uordblks 53.26 MB
 **刻意不提供运行时卸载**：卸载后已分配的块 `free` 就看不见了，
 存活字节会永远停在那里，比"不卸载"更容易被误读成泄漏——要停观察用 `pause`/`reset`。
 
+**独立 oracle 对拍（heapprofd）**：与 Perfetto heapprofd（hook MallocDispatch
+分配器入口，与本模块的 PLT 层机制正交）双探针同进程实测——同一批 32×1MB，
+heapprofd 记 `33,554,432 B / 32 objs`、栈离线符号化到**同一个函数**
+（`my_malloc @ memtrace.cpp:431`）；本模块记 30 笔，差额由
+`skippedContended=195` 计数器解释（锁竞争下的设计取舍，见 §3.2）。
+真机侧另有一个平台边界：MIUI user build 上 heapprofd 无法归因 App 自己的
+`.so`（SELinux 拒绝读 App 文件 ⇒ unwind 失败 ⇒ 样本丢弃），本模块不受影响。
+工具 `tools/perfetto/record-heapprofd.sh`，完整对拍见方案文档 **§3.6 + 附录 M14**。
+
 ### 4.2 路径二：图形内存（`BitmapTracker`）
 
 线上 OOM 成因里位图长期排第一，且它有个迷惑性：**API 26+ 像素数据在 native 堆，

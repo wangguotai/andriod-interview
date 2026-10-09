@@ -222,6 +222,33 @@
             android:layout_weight="1"
             android:textSize="11sp"
             android:text="趋势报告" />
+
+        <Button
+            android:id="@+id/btn_native_trend"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="Native趋势" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_smaps"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="smaps映射归因" />
+
+        <View
+            android:layout_width="0dp"
+            android:layout_height="1dp"
+            android:layout_weight="1" />
     </LinearLayout>
 
     <LinearLayout

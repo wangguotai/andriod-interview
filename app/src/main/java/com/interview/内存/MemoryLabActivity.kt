@@ -369,6 +369,21 @@ class MemoryLabActivity : AppCompatActivity() {
             emit("【趋势报告】\n" + MemoryMonitor.flushTrend("MemoryLab"))
         }
 
+        bind(R.id.btn_native_trend) {
+            emit("【Native 趋势报告（第二条判决线）】\n" + MemoryMonitor.flushNativeTrend("MemoryLab"))
+        }
+
+        bind(R.id.btn_smaps) {
+            // ⚠️ 必须在后台线程：一次 smaps 读是"重"的（百 KB~MB 级 + 毫秒~几十毫秒解析）。
+            //    emit 内部已 runOnUiThread，所以这里直接在后台算完调 emit。
+            emit("【smaps 映射级归因】读取 /proc/self/smaps …（后台线程）")
+            Thread {
+                val text = runCatching { SmapsReader.readSelf().describe(topN = 20) }
+                    .getOrElse { "读取失败：${it.message}\n⚠️ 部分 ROM/SELinux 会限制读 /proc/self/smaps" }
+                emit(text)
+            }.apply { name = "smaps-read" }.start()
+        }
+
         bind(R.id.btn_trim_sim) {
             emit(
                 "【模拟 trim 压力】\n" +

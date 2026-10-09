@@ -701,6 +701,244 @@ object MemoryMetrics {
     }
 
     // ─────────────────────────────────────────────
+    // 五之二、Native 独立判决
+    // ─────────────────────────────────────────────
+
+    /**
+     * **Native 侧的趋势判决**（与 [Trend] 平级的第二条判决线）。
+     *
+     * ─── 为什么 native 必须有**自己的**判决，而不是搭 Java 的便车 ───
+     *
+     * 之前的实现里，`Trend.analyze` 的 `base/peak/last` **全部取自 `javaUsedBytes`**，
+     * native 只在旁边报一个布尔标志 [Trend.Result.nativeSyncedRise]。
+     * 后果是一个真实的漏判：
+     *
+     * > **Java 堆平稳、native 单边猛涨**的那种泄漏，会显示成 `STABLE`。
+     *
+     * 而这类泄漏在线上并不罕见（自研 .so、JNI 局部引用、位图、三方 SDK 的缓存池），
+     * 恰恰是 Java 直方图**看不见**的那一半（hprof 只遍历托管堆）。
+     * 所以 native 需要一个不依赖 Java 堆的判据。
+     *
+     * ─── 与 Java 判决的**三个刻意差异** ───
+     *
+     * 1. **四个信号各自判，再组合诊断**（Java 只有一个 `javaUsedBytes`）。
+     *    四个信号回答的是不同问题，必须分开看：
+     *      · [Signal.ALLOCATED] 分配器净账  → **我们自己的 malloc 有没有泄漏**
+     *      · [Signal.HEAP_SIZE] 已映射总量  → 净账不涨而它在涨 = **碎片**（不是泄漏）
+     *      · [Signal.VM_RSS]    进程驻留    → 含 mmap 大块、code、线程栈、图形
+     *      · [Signal.GRAPHICS]  图形 PSS    → 位图/纹理这条线
+     *    实测依据：一个 8 MB 的 malloc 在 API 26+ 可能走 **mmap**，
+     *    于是 ALLOCATED 把它排除、VM_RSS 算进去（见类注释 §一.3）——
+     *    **只看一个数一定会指错方向**。
+     *
+     * 2. **阈值更小**：native 的大块常走 mmap 而不进 `allocated`，
+     *    单个信号的绝对幅度天然比 Java 堆小；沿用 Java 的 16 MB 会漏判。
+     *    这里取 8 MB，**它是启发式的经验值，生产口径要求可远程下发**（同水位阈值）。
+     *
+     * 3. **`GROW_AND_FALL` 在 native 上要更可疑**（判据本身同构，但解读不同）：
+     *    Java 有 GC 这个**强制的**回收机制，涨了回落是常态；
+     *    native **没有等价的强制回收**（只能靠显式 free 或进程退出），
+     *    所以 native 一旦"涨上去"，回落通常意味着确实有人放了——
+     *    这反而是**好**信号。真正危险的是**不回落**的那种。
+     *
+     * ⚠️ **诚实边界**（与 [Trend] 完全一致，别把它当泄漏证明）：
+     *    · `SUSPECT` 只给"值得看一眼"，**不是**泄漏的结论；
+     *    · native 没有 GC，所以本类**提供不了** [Trend.gcValleys] 那样的谷值包络
+     *      —— 要估 native 泄漏速率只能靠"多窗口确认 + 归因"（装探针看 per-site）。
+     *    · 采样间隔（默认 2s）会漏掉两次采样之间的分配-释放对，看的是**净效果**。
+     */
+    object NativeTrend {
+
+        /** native 单信号上涨阈值：8 MB。低于此视为正常抖动（可调，生产应远程下发）。 */
+        const val RISE_THRESHOLD_BYTES = 8L * 1024 * 1024
+
+        /** 回落容差：2 MB。低于此视为"回落到低点了"。 */
+        const val FALLBACK_TOLERANCE_BYTES = 2L * 1024 * 1024
+
+        enum class Verdict {
+            /** 窗口内没有显著变化 */
+            STABLE,
+
+            /** 涨过又回落 → 在 native 上通常是"有人显式放了"，偏正常 */
+            GROW_AND_FALL,
+
+            /** 涨上去回不来 → 「值得看一眼」，**不是**泄漏的证明 */
+            SUSPECT,
+
+            /** 该信号在本次窗口内**根本读不到**（全 0 / 全 -1）—— 必须与 STABLE 区分 */
+            UNKNOWN,
+        }
+
+        /** 四个独立信号。`label` 是给人看的说明，直接进报告。 */
+        enum class Signal(val label: String) {
+            ALLOCATED("分配器净账 malloc/free"),
+            HEAP_SIZE("分配器已映射（含 free 缓存/碎片）"),
+            VM_RSS("进程驻留 VmRSS（含 mmap/code/图形）"),
+            GRAPHICS("图形 summary.graphics"),
+        }
+
+        data class SignalResult(
+            val signal: Signal,
+            val verdict: Verdict,
+            val baseBytes: Long,
+            val peakBytes: Long,
+            val lastBytes: Long,
+            val riseBytes: Long,
+            val fallbackBytes: Long,
+            val sampleCount: Int,
+        ) {
+            fun describe(): String = when (verdict) {
+                Verdict.UNKNOWN -> "${signal.label}：本窗口读不到（UNKNOWN）"
+                Verdict.STABLE -> "${signal.label}：STABLE（波动 ${fmt(riseBytes)}）"
+                Verdict.GROW_AND_FALL -> "${signal.label}：涨 ${fmt(riseBytes)} → 回落 ${fmt(fallbackBytes)}"
+                Verdict.SUSPECT -> "${signal.label}：⚠️ 涨 ${fmt(riseBytes)} 且未回落" +
+                        "（${fmt(baseBytes)} → ${fmt(lastBytes)}）"
+            }
+        }
+
+        data class Result(
+            /** 四个信号里**取最严重**的那个作为总判决 —— native 无上限，所以"最严重"是并集不是加权 */
+            val verdict: Verdict,
+            val signals: List<SignalResult>,
+            /** 组合诊断：由"哪几个信号在涨"推出最可能的归因方向 */
+            val cause: String,
+            val windowMs: Long,
+            val sampleCount: Int,
+        ) {
+            fun signal(s: Signal): SignalResult? = signals.firstOrNull { it.signal == s }
+
+            fun describe(): String = buildString {
+                appendLine("═══ Native 趋势判决 ═══")
+                appendLine("总判决：$verdict" +
+                        "（窗口 ${windowMs / 1000}s / $sampleCount 点）")
+                signals.forEach { appendLine("  · " + it.describe()) }
+                appendLine("  ⇒ 归因方向：$cause")
+            }
+        }
+
+        /**
+         * 对窗口内的点做四个信号的独立判决，再组合诊断。
+         *
+         * @return 不足 3 点时返回 null（与 [Trend.analyze] 同一纪律：样本不够不下结论）
+         */
+        fun analyze(
+            points: List<Snapshot>,
+            riseThreshold: Long = RISE_THRESHOLD_BYTES,
+            fallbackTolerance: Long = FALLBACK_TOLERANCE_BYTES,
+        ): Result? {
+            if (points.size < 3) return null
+
+            // 每个信号：取值列 → 判判决。取值列里若有非法值（-1）必须整体视为不可用，
+            // 而不是把它当 0 混进去（那会造出一条假的"暴涨/暴降"）。
+            val results = listOf(
+                judge(Signal.ALLOCATED, points.map { it.nativeAllocatedBytes }, riseThreshold, fallbackTolerance),
+                judge(Signal.HEAP_SIZE, points.map { it.nativeHeapSizeBytes }, riseThreshold, fallbackTolerance),
+                judge(Signal.VM_RSS, points.map { it.vmRssKb.toLong() * 1024 }, riseThreshold, fallbackTolerance),
+                judge(Signal.GRAPHICS, points.map { it.graphicsPssKb.toLong() * 1024 }, riseThreshold, fallbackTolerance),
+            )
+
+            // 总判决取最严重：UNKNOWN < STABLE < GROW_AND_FALL < SUSPECT
+            val verdict = results.maxByOrNull { severity(it.verdict) }?.verdict ?: Verdict.UNKNOWN
+
+            return Result(
+                verdict = verdict,
+                signals = results,
+                cause = diagnose(results),
+                windowMs = points.last().timestamp - points.first().timestamp,
+                sampleCount = points.size,
+            )
+        }
+
+        private fun severity(v: Verdict): Int = when (v) {
+            Verdict.UNKNOWN -> 0
+            Verdict.STABLE -> 1
+            Verdict.GROW_AND_FALL -> 2
+            Verdict.SUSPECT -> 3
+        }
+
+        /**
+         * 单信号判决。判据与 [Trend] 同构（最小值基线 + 回落容差），
+         * 这样两条线的结论**可以互相引用而不会互相矛盾**。
+         */
+        private fun judge(
+            signal: Signal,
+            series: List<Long>,
+            riseThreshold: Long,
+            fallbackTolerance: Long,
+        ): SignalResult {
+            // 数据有效性：全非法 → UNKNOWN（必须是 UNKNOWN 而不是 STABLE，
+            // 两者在报告里的含义天差地别 —— "没涨" vs "没读到"）
+            val valid = series.all { it > 0 }
+            if (!valid) {
+                return SignalResult(signal, Verdict.UNKNOWN, 0, 0, 0, 0, 0, series.size)
+            }
+            val base = series.min()
+            val peak = series.max()
+            val last = series.last()
+            val rise = peak - base
+            val fallback = peak - last
+
+            val verdict = when {
+                last - base <= fallbackTolerance -> Verdict.STABLE
+                rise < riseThreshold -> Verdict.STABLE
+                fallback <= fallbackTolerance -> Verdict.SUSPECT
+                else -> Verdict.GROW_AND_FALL
+            }
+            return SignalResult(signal, verdict, base, peak, last, rise, fallback, series.size)
+        }
+
+        /**
+         * 组合诊断 —— **这才是"四个信号分开判"的收益所在**。
+         *
+         * 单个信号只能说"涨了"，哪几个一起涨才指向具体原因。
+         */
+        private fun diagnose(rs: List<SignalResult>): String {
+            val alloc = rs.first { it.signal == Signal.ALLOCATED }
+            val heap = rs.first { it.signal == Signal.HEAP_SIZE }
+            val rss = rs.first { it.signal == Signal.VM_RSS }
+            val gfx = rs.first { it.signal == Signal.GRAPHICS }
+
+            fun rising(v: Verdict) = v == Verdict.SUSPECT
+
+            return when {
+                // 四个都不可用：配置/ROM 问题，不是内存问题
+                rs.all { it.verdict == Verdict.UNKNOWN } ->
+                    "四个信号都读不到 —— 先查监控本身（ROM 差异 / 读权限），别急着查内存"
+
+                // 净账与 RSS 一起涨：最典型的 malloc 侧泄漏
+                rising(alloc.verdict) && rising(rss.verdict) ->
+                    "分配器净账与 RSS 同步上涨 ⇒ **优先怀疑我们自己的 native 分配**。" +
+                            "下一步：装 memtrace 探针 → 归因报告 → native-mem-symbolize.sh 定到行" +
+                            "（探针会改变被测对象，装/不装不能直接比）"
+
+                // 净账不涨、RSS 涨、图形也涨：图形线
+                !rising(alloc.verdict) && rising(rss.verdict) && rising(gfx.verdict) ->
+                    "净账不动而图形与 RSS 同步涨 ⇒ **图形内存**（位图/纹理）。" +
+                            "下一步：BitmapTracker 按来源/Config 看，再对比 summary.graphics 的差额；" +
+                            "差额大就下钻 smaps 的 /dev/kgsl* 与 gralloc"
+
+                // 净账不涨、RSS 涨、图形不涨：mmap 大块 / 线程栈 / code
+                !rising(alloc.verdict) && rising(rss.verdict) && !rising(gfx.verdict) ->
+                    "净账不动但 RSS 在涨 ⇒ 分配器**看不见**的那部分：" +
+                            "mmap 大块 / 线程栈 / code / 文件映射。" +
+                            "下一步：SmapsReader 看逐条映射（重点 /dev/kgsl*、[stack]、大块 anon）"
+
+                // 净账不涨但"已映射"在涨：碎片，不是泄漏
+                !rising(alloc.verdict) && rising(heap.verdict) ->
+                    "净账不涨但**已映射总量**在涨 ⇒ 更像**碎片/free 缓存**，不是存活泄漏。" +
+                            "查 scudo 尺寸档与浪费率（allocatorWasteRatio），必要时触发一次显式回收观察是否回落"
+
+                // 只有净账涨
+                rising(alloc.verdict) ->
+                    "只有分配器净账在涨 ⇒ native 侧确有存活分配增长；" +
+                            "但 RSS 未同步，可能是小对象为主。同样走 memtrace 归因"
+
+                else -> "四个信号都未见显著上涨（或只是涨了会回落）—— 当前窗口 native 侧无明确异常"
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────
     // 六、格式化
     // ─────────────────────────────────────────────
 

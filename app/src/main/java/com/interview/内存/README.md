@@ -244,13 +244,35 @@ symbol file**（官方 per-build 符号包 / AOSP `symbols/`），且**用错的
 
 ---
 
-## 四、归因三路径与各自能力边界
+## 四、归因路径与各自能力边界
 
 | 路径 | 回答什么 | 成本 | 本机（模拟器 API 36 / arm64） |
 |---|---|---|---|
 | `MemoryAllocTracker`（native hook） | native 里**哪个函数**要的内存 | 热路径开销，需显式安装 | ✅ 实测可用 |
 | `MemoryHeapAnalyzer`（Java 直方图） | Java 堆里**哪一类对象**占了多少 | 一次 dump（秒级冻结） | ✅ 自研 hprof 解析 |
 | `BitmapTracker`（图形内存） | 位图几张、共多少、谁占大头 | 每次创建一次原子累加 | ✅ |
+| `SmapsReader`（映射级，**新增**） | 三条路都照不到时，**哪段映射/哪类**在涨 | 一次 smaps 读（重，不进采样） | ✅ 真机 126 条精确对账 |
+
+### 4.0 判决与取证是两件事（**本轮补上的缺口**）
+
+⚠️ 之前只有 Java 堆有**独立判决**，native 只作为"是否同步上涨"的布尔标志存在：
+
+```
+旧：Java 堆平稳 + native 单边猛涨 → Trend 显示 STABLE、**发不出事件**（真实漏判）
+新：NativeTrend 对四个信号（净账/已映射/VmRSS/图形）**各自判决**再组合诊断
+```
+
+四信号分开判的价值：**单个信号只能说"涨了"，哪几个一起涨才指向原因**：
+
+| 现象 | 诊断方向 |
+|---|---|
+| 净账 + RSS 同步涨 | 我们自己的 native 分配 → 装 memtrace 探针归因 |
+| 净账不动 + 已映射涨 | **碎片/free 缓存**，不是存活泄漏 |
+| 净账不动 + RSS 涨 | mmap 大块 / 线程栈 / code → `SmapsReader` |
+| 净账不动 + RSS涨 + 图形涨 | 图形线 → `BitmapTracker` → smaps 的 `/dev/kgsl*` |
+
+⚠️ 读不到（如 ROM 拿不到 `summary.graphics`）判 **UNKNOWN**，**不并进 STABLE** ——
+"没读到"和"没涨"在报告里含义天差地别。
 
 ### 4.1 路径一：Native 分配归因（`memtrace`）
 
@@ -292,6 +314,7 @@ Java 堆上"看不见"**——"Java 堆没涨却 OOM 了"十有八九是位图�
 ⚠️ **诚实边界**：计数依赖调用方老实调用，Glide 内部创建的位图**不经过这里**
 （除非挂 `RequestListener`）。所以 **本计数恒 ≤ 系统 `summary.graphics`**，
 差额 = 三方库 + 系统资源，**差额是信息不是 bug**：差额大 ⇒ 图形内存大头不在我们的代码路径上。
+这时下一步是 `SmapsReader` 看 `/dev/kgsl*` / gralloc 那几段映射。
 
 ### 4.3 路径三：Java 直方图（`HeapDumpGate` + `HeapDiff`）
 
@@ -308,6 +331,22 @@ Java 堆上"看不见"**——"Java 堆没涨却 OOM 了"十有八九是位图�
 `HeapDiff.diff` 是纯函数、无 Android 依赖（可在宿主 JVM 单测）。
 单张直方图只能看"谁最大"（可能一直如此、属正常）；
 **差分**才回答"谁在这次操作里**涨了**"——那才是要动手改的地方（默认阈值 256KB）。
+
+### 4.4 路径四：映射级下钻（`SmapsReader`，兜底）
+
+前面三条路有个**共同盲区**：都是"分配器/VM 口径"，只看得见经过我们代码或 ART 的映射。
+真机上有一类现场三条都照不到：**Java 不涨、nativeAlloc 不涨、BitmapTracker 不涨，
+但 VmRSS / totalPss 一路涨**——钱花在三方 .so、按需加载的 dex/oat、字体、
+GPU 驱动映射、命名匿名段上。`/proc/self/smaps` 是内核给的逐映射账单，是唯一能兜住它的。
+
+真机实测（K40）**126 条映射精确对账**（parsed == 真实映射头数，skipped=0）。
+两个解析真坑：**头行不能 `split(" ")`**（`[anon:dalvik-main space (region space)]`
+含空格）；**属性值不能按固定空格数切**（`Rss:` 后 1~N 个空格）。未知键（`SwapPss`/
+`Anonymous`/`THPeligible`…）一律忽略——不同内核属性集不同，把新键当错误会让监控
+升级内核后全线失效。
+
+⚠️ 边界：**RSS 是共享页重复计数口径**，看"我还欠多少不可回收内存"要用 **Private_Dirty**；
+一次读很重（百 KB~MB），**不进 2s 采样**；只做单点快照，判断"涨没涨"要自己跨两次 diff。
 
 ---
 
@@ -501,11 +540,13 @@ override fun onCreate() {
    现已在**水位升到 CRITICAL 的那一个采样点**当场落台账（只因上升沿触发，
    全进程最多写一次，不违反"采集点零 IO"）。
    实测末行：`... 200437328  201326592 ... CRITICAL:NORMAL->CRITICAL`（191.15MB / 192.00MB = 99.6%）。
-   ⚠️ **但仍有残余缺口**：遗嘱里目前只有水位 + trim + native 总量，
-   **没有** native 的 Top-N 站点快照（那需要 `pause` 探针后遍历，成本更高）；
+   ⚠️ **但仍有残余缺口**：遗嘱里目前只有水位 + trim + native 总量 + **native 判决方向**
+   （本轮补上：`native=<verdict>`），**没有** native 的 Top-N 站点快照
+   （那需要 `pause` 探针后遍历，成本更高）；
    且 `appendJournal` 仍**不 fsync**，极端情况下（进程被杀前 RST 页面未刷）仍可能只留一部分。
-2. **smaps 级映射聚合尚未独立成 `SmapsReader`**。目前 native 视角用
-   `MemoryInfo` / `VmRSS` 口径，还拆不到"so / 字体 / 资源"的映射明细。
+2. ✅ **~~smaps 级映射聚合尚未独立成 `SmapsReader`~~ → 已实现**（§4.4）。
+   残余边界：RSS 共享页重复计数（看 Private_Dirty 才准）、只读得到本进程、
+   单点快照不做时序 diff（要自己跨两次按 `startAddr` 对齐）。
 3. **系统库帧需要匹配的 symbol file 才能符号化**（见 §3.4），
    否则只能标"需 symbol file"，不猜。
 4. **native 归因是有损采样**，只回答"大头在哪"，**不回答**"有没有漏 200KB"。

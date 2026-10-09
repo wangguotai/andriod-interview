@@ -308,7 +308,20 @@ object MemoryMonitor {
                 //    不是"每次采样都写盘"。
                 if (level == MemoryMetrics.Level.CRITICAL) {
                     appContext?.let { ctx ->
-                        appendJournal(ctx, s, note = "CRITICAL:${from}->${level}")
+                        // ⭐ 遗嘱里**顺带记下 native 的判决方向**（纯列表运算，微秒级，
+                        //    不含 IO —— 不违反"采集点零 IO"，且它本来就只在这一条上升沿跑一次）。
+                        //    为什么重要：OOM 现场往往事后无法复现，这一刻的"哪条线在涨"
+                        //    是**不可再生**的信息；只记总量而不记方向，事后只能靠猜。
+                        val nativeNote = runCatching {
+                            MemoryMetrics.NativeTrend.analyze(sampler?.points().orEmpty())?.let {
+                                "native=${it.verdict}"
+                            }
+                        }.getOrNull()
+                        val note = buildString {
+                            append("CRITICAL:${from}->${level}")
+                            if (nativeNote != null) append(" ").append(nativeNote)
+                        }
+                        appendJournal(ctx, s, note = note)
                         Log.w(TAG, "已落内存遗嘱（CRITICAL）：${MemoryMetrics.oneLine(s)}")
                     }
                 }
@@ -399,6 +412,62 @@ object MemoryMonitor {
                     kind = StabilityReporter.Kind.MEMORY_TREND,
                     timestamp = System.currentTimeMillis(),
                     name = "trend:$tag:${trend?.verdict ?: "UNKNOWN"}",
+                    valueMs = (points.last().timestamp - points.first().timestamp) / 1000,
+                    threadName = Thread.currentThread().name,
+                    isMainThread = android.os.Looper.myLooper() == android.os.Looper.getMainLooper(),
+                    isForeground = StabilityReporter.isForeground(),
+                    pid = android.os.Process.myPid(),
+                    detail = report.take(4096),
+                )
+            )
+        }
+        return report
+    }
+
+    /**
+     * **Native 独立趋势报告**（第二条判决线，与 [flushTrend] 平级）。
+     *
+     * ─── 为什么必须单独一个入口 ───
+     * [flushTrend] 的判决完全基于 `javaUsedBytes`，native 只作为一个布尔标志出现 ——
+     * 于是"Java 平稳、native 单边泄漏"会显示成 STABLE（详见 [MemoryMetrics.NativeTrend] 注释）。
+     * 本方法补上 native 自己的判决，并在 `SUSPECT` 时**发出独立事件**，
+     * 这样服务端聚合维度上"native 泄漏"不再寄生在 Java 事件里。
+     *
+     * ⚠️ 与 [flushTrend] 同一条纪律：本方法由定时器/页面显式调用，
+     *    **不在采样回调里自动跑**（采集点零 IO）。
+     */
+    fun flushNativeTrend(tag: String = "全局"): String {
+        val points = sampler?.points().orEmpty()
+        if (points.size < 3) {
+            return "native 趋势样本不足（${points.size} 点，至少 3 点）。先让页面停留几十秒。"
+        }
+        val nt = MemoryMetrics.NativeTrend.analyze(points)
+        val report = buildString {
+            appendLine("═══ Native 趋势报告（$tag）═══")
+            appendLine(nt?.describe() ?: "（无法判定）")
+            appendLine()
+            appendLine("窗口：${points.size} 点 / ${(points.last().timestamp - points.first().timestamp) / 1000}s")
+            appendLine()
+            appendLine("──────────────────────────────")
+            appendLine(MemoryMetrics.describe(points.last()))
+            appendLine("──────────────────────────────")
+            appendLine(MemoryAllocTracker.status())
+            appendLine("──────────────────────────────")
+            appendLine("⚠️ NativeTrend 的 SUSPECT **不是泄漏证明**，只给「值得看一眼」。")
+            appendLine("   native 没有 GC，所以给不出 Java 侧那种谷值包络；")
+            appendLine("   要证明必须走归因：MemoryAllocTracker 探针 → 报告 → 离线符号化。")
+        }
+        Log.w(TAG, report)
+
+        val rate = summarySampleRate.coerceAtLeast(1)
+        if (rate == 1 || summaryCounter.incrementAndGet() % rate == 0L) {
+            StabilityReporter.forceReport(
+                StabilityReporter.Event(
+                    kind = if (nt?.verdict == MemoryMetrics.NativeTrend.Verdict.SUSPECT)
+                        StabilityReporter.Kind.MEMORY_NATIVE_SUSPECT
+                    else StabilityReporter.Kind.MEMORY_TREND,
+                    timestamp = System.currentTimeMillis(),
+                    name = "nativeTrend:$tag:${nt?.verdict ?: "UNKNOWN"}",
                     valueMs = (points.last().timestamp - points.first().timestamp) / 1000,
                     threadName = Thread.currentThread().name,
                     isMainThread = android.os.Looper.myLooper() == android.os.Looper.getMainLooper(),

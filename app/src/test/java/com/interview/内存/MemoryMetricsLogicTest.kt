@@ -357,4 +357,173 @@ class MemoryMetricsLogicTest {
         val s = snap(1, 100).copy(nativeHeapSizeBytes = 0, nativeAllocatedBytes = 0)
         assertEquals(0f, s.allocatorWasteRatio, 0.0001f)
     }
+
+    // ─────────────────────────────────────────────
+    // 八、Native 独立判决（NativeTrend）
+    // ─────────────────────────────────────────────
+
+    /**
+     * 造一串快照：四个 native 信号各自按"每点 MB"序列给定。
+     *
+     * ⚠️ 与 [series] 同一纪律：**必须逐点赋值**，否则信号恒定 → rise 恒 0 → 用例假绿。
+     *    这里用显式的 per-point 列表，而不是"末点值"，就是为了让调用方写不出假绿。
+     */
+    private fun nativeSeries(
+        allocatedMb: List<Int>,
+        heapSizeMb: List<Int> = allocatedMb,
+        rssMb: List<Int> = allocatedMb,
+        graphicsMb: List<Int> = allocatedMb,
+    ): List<MemoryMetrics.Snapshot> {
+        require(allocatedMb.size == heapSizeMb.size && allocatedMb.size == rssMb.size &&
+                allocatedMb.size == graphicsMb.size) { "四个信号的序列长度必须一致" }
+        return allocatedMb.indices.map { i ->
+            snap(50L * 1024 * 1024, 256L * 1024 * 1024).copy(
+                timestamp = i * 2000L,
+                nativeAllocatedBytes = allocatedMb[i].toLong() * 1024 * 1024,
+                nativeHeapSizeBytes = heapSizeMb[i].toLong() * 1024 * 1024,
+                vmRssKb = rssMb[i] * 1024,
+                graphicsPssKb = graphicsMb[i] * 1024,
+            )
+        }
+    }
+
+    @Test
+    fun `native 样本不足三点时不下结论`() {
+        assertEquals(null, MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(10, 20))))
+    }
+
+    @Test
+    fun `native 平缓序列应判 STABLE`() {
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(50, 51, 50, 51, 50)))!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.STABLE, r.verdict)
+    }
+
+    @Test
+    fun `native 涨了会回落应判 GROW_AND_FALL`() {
+        // 40 → 120 涨 80MB（>8MB 阈值），末点回到 45（回落 75MB）。
+        // ⚠️ 末点不能取 41/42：`last - base` 会落进 2MB 回落容差内，
+        //    命中第一条分支判成 STABLE —— 这是判据的**短路顺序**决定的，不是 bug。
+        val r = MemoryMetrics.NativeTrend.analyze(
+            nativeSeries(listOf(40, 80, 120, 90, 45))
+        )!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.GROW_AND_FALL, r.verdict)
+    }
+
+    @Test
+    fun `native 涨了不回落应判 SUSPECT`() {
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(40, 50, 60, 70, 80)))!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.SUSPECT, r.verdict)
+    }
+
+    @Test
+    fun `native 涨不到阈值时不应触发（阈值 8MB 小于 Java 的 16MB，但也不是随便就报）`() {
+        // 涨 6MB < 8MB
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(40, 42, 44, 45, 46)))!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.STABLE, r.verdict)
+    }
+
+    @Test
+    fun `native 阈值确实比 Java 的更小：同样涨 10MB，Java 判 STABLE 而 native 判 SUSPECT`() {
+        val pts = nativeSeries(listOf(40, 43, 46, 48, 50))   // 涨 10MB
+        // Java 侧这条序列的 used 是恒定 50MB（见 nativeSeries），所以 Java 必然 STABLE
+        val javaVerdict = MemoryMetrics.Trend.analyze(pts)!!.verdict
+        val nativeVerdict = MemoryMetrics.NativeTrend.analyze(pts)!!.verdict
+        assertEquals("Java 阈值 16MB ⇒ 10MB 不动", MemoryMetrics.Trend.Verdict.STABLE, javaVerdict)
+        assertEquals("native 阈值 8MB ⇒ 10MB 应报", MemoryMetrics.NativeTrend.Verdict.SUSPECT, nativeVerdict)
+    }
+
+    /**
+     * ⭐ **这条是本次改动的核心回归**：
+     * Java 堆完全平稳、只有 native 单边涨 —— 旧实现会显示 STABLE 且**发不出事件**。
+     */
+    @Test
+    fun `Java 堆平稳但 native 单边泄漏时 native 判决必须报 SUSPECT`() {
+        // nativeSeries 里 javaUsed 恒为 50MB ⇒ Java 侧 STABLE
+        val pts = nativeSeries(listOf(40, 60, 80, 100, 120))
+        assertEquals(MemoryMetrics.Trend.Verdict.STABLE, MemoryMetrics.Trend.analyze(pts)!!.verdict)
+        assertEquals(
+            "这正是旧实现漏判的场景",
+            MemoryMetrics.NativeTrend.Verdict.SUSPECT,
+            MemoryMetrics.NativeTrend.analyze(pts)!!.verdict,
+        )
+    }
+
+    @Test
+    fun `native 基线同样取窗口最小值而不是第一个点`() {
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(90, 40, 60, 100)))!!
+        val s = r.signal(MemoryMetrics.NativeTrend.Signal.ALLOCATED)!!
+        assertEquals("基线应是 40MB（窗口最小值）", 40L * 1024 * 1024, s.baseBytes)
+    }
+
+    @Test
+    fun `信号读不到时必须判 UNKNOWN 而不是 STABLE`() {
+        // 全 0 ⇒ 读不到。若判 STABLE，"没读到"会被当成"没涨"，是最危险的静默错误
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(0, 0, 0, 0)))!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.UNKNOWN, r.verdict)
+        val s = r.signal(MemoryMetrics.NativeTrend.Signal.ALLOCATED)!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.UNKNOWN, s.verdict)
+    }
+
+    @Test
+    fun `单个信号读不到时只影响该信号不拖累其它信号`() {
+        // graphics 全 0（很多 ROM 拿不到），其余三个正常上涨
+        val pts = nativeSeries(
+            allocatedMb = listOf(40, 50, 60, 70, 80),
+            graphicsMb = listOf(0, 0, 0, 0, 0),
+        )
+        val r = MemoryMetrics.NativeTrend.analyze(pts)!!
+        assertEquals(MemoryMetrics.NativeTrend.Verdict.SUSPECT, r.verdict)
+        assertEquals(
+            MemoryMetrics.NativeTrend.Verdict.UNKNOWN,
+            r.signal(MemoryMetrics.NativeTrend.Signal.GRAPHICS)!!.verdict,
+        )
+        assertEquals(
+            MemoryMetrics.NativeTrend.Verdict.SUSPECT,
+            r.signal(MemoryMetrics.NativeTrend.Signal.ALLOCATED)!!.verdict,
+        )
+    }
+
+    @Test
+    fun `净账与 RSS 同步上涨时诊断应指向我们自己的 native 分配`() {
+        val r = MemoryMetrics.NativeTrend.analyze(nativeSeries(listOf(40, 50, 60, 70, 80)))!!
+        assertTrue("应指向 memtrace 归因", r.cause.contains("native 分配"))
+    }
+
+    @Test
+    fun `净账不涨但已映射在涨时诊断应指向碎片而不是泄漏`() {
+        // allocated 平；heapSize 涨
+        val pts = nativeSeries(
+            allocatedMb = listOf(40, 40, 40, 40, 40),
+            heapSizeMb = listOf(40, 50, 60, 70, 80),
+            rssMb = listOf(40, 40, 40, 40, 40),
+            graphicsMb = listOf(40, 40, 40, 40, 40),
+        )
+        val r = MemoryMetrics.NativeTrend.analyze(pts)!!
+        assertTrue("应指向碎片/free 缓存", r.cause.contains("碎片"))
+    }
+
+    @Test
+    fun `净账不动但 RSS 涨时诊断应指向 mmap 大块而不是泄漏`() {
+        val pts = nativeSeries(
+            allocatedMb = listOf(40, 40, 40, 40, 40),
+            heapSizeMb = listOf(40, 40, 40, 40, 40),
+            rssMb = listOf(40, 50, 60, 70, 80),
+            graphicsMb = listOf(40, 40, 40, 40, 40),
+        )
+        val r = MemoryMetrics.NativeTrend.analyze(pts)!!
+        assertTrue("应指向 mmap/栈/code", r.cause.contains("mmap") || r.cause.contains("栈"))
+    }
+
+    @Test
+    fun `法定顺序：UNKNOWN 最轻 SUSPECT 最重，总判决取最严重`() {
+        // graphics 读不到(UNKNOWN) + allocated 稳(STABLE) + heapSize 涨回(SUSPECT)
+        val pts = nativeSeries(
+            allocatedMb = listOf(40, 40, 40, 40, 40),
+            heapSizeMb = listOf(40, 50, 60, 70, 80),
+            rssMb = listOf(40, 40, 40, 40, 40),
+            graphicsMb = listOf(0, 0, 0, 0, 0),
+        )
+        val r = MemoryMetrics.NativeTrend.analyze(pts)!!
+        assertEquals("最严重信号决定总判决", MemoryMetrics.NativeTrend.Verdict.SUSPECT, r.verdict)
+    }
 }

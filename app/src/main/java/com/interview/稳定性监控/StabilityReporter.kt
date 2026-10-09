@@ -100,6 +100,17 @@ object StabilityReporter {
 
         /** 周期性的内存趋势聚合报告（有采样率，默认 1/5 会话） */
         MEMORY_TREND,
+
+        /**
+         * **Native 侧**趋势判决为 SUSPECT（涨了不回落）。
+         *
+         * ⚠️ 为什么必须是**独立**的 kind，而不是复用 [MEMORY_TREND]：
+         *    之前 native 只作为 Java 判决里的一个布尔标志存在，于是
+         *    "Java 堆平稳、native 单边泄漏"会显示成 STABLE、**根本发不出事件**。
+         *    独立 kind 才能让服务端按 kind 聚合出"native 泄漏占比"这个维度
+         *    （寄生在 MEMORY_TREND 里的话，聚合口径就只能靠解析 detail 文本）。
+         */
+        MEMORY_NATIVE_SUSPECT,
     }
 
     /** 归一化事件。字段刻意保持扁平 —— 便于直接映射到 APM 的宽表 */

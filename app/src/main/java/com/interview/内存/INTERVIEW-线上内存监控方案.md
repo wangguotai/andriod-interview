@@ -158,6 +158,47 @@ CRITICAL 降到 **75%**（代码里是 `bump = 0.10f`）。
 这不是 bug，是 scudo 的实现边界 —— 但它非常容易让人误以为"分配器报告里没多少内存，
 所以 native 没问题"。
 
+### 2.2.1 Native 的**独立判决**（`NativeTrend`，补掉一个真实漏判）
+
+**改之前的问题**：`Trend.analyze` 的 `base/peak/last` **全部取自 `javaUsedBytes`**，
+native 只作为判决里一个布尔标志 `nativeSyncedRise` 存在。于是：
+
+> **Java 堆平稳、native 单边猛涨**的那种泄漏 → 判决显示 **STABLE**，**根本发不出事件**。
+
+而这类泄漏线上并不罕见（自研 .so、JNI 局部引用、位图、三方 SDK 缓存池），
+恰恰是 Java 直方图**看不见**的那一半（hprof 只遍历托管堆）。
+
+**改之后**：`NativeTrend` 对**四个信号各自独立判决**，再组合诊断——
+分开判的价值就在这里：单个信号只能说"涨了"，**哪几个一起涨才指向具体原因**。
+
+| 信号 | 回答什么 | 涨了意味着 |
+|---|---|---|
+| `ALLOCATED` 分配器净账 | malloc/free 净账 | **我们自己的** native 分配在泄漏 |
+| `HEAP_SIZE` 已映射总量 | 含 free 缓存/碎片 | 净账不涨而它涨 = **碎片**，不是泄漏 |
+| `VM_RSS` 进程驻留 | 含 mmap/code/图形 | 分配器看不见的那部分在涨 |
+| `GRAPHICS` 图形 PSS | 位图/纹理这条线 | 走图形线查 |
+
+**组合诊断**（`NativeTrend.diagnose`，实测输出示例）：
+```
+净账 + RSS 同步涨        → 优先怀疑我们自己的 native 分配 → 装探针归因
+净账不动 + RSS涨 + 图形涨 → 图形内存（BitmapTracker → smaps 的 /dev/kgsl*）
+净账不动 + RSS 涨         → 分配器看不见的：mmap 大块 / 线程栈 / code → SmapsReader
+净账不动 + 已映射涨        → 碎片/free 缓存，不是存活泄漏
+```
+
+**与 Java 判决的三个刻意差异**（都写进了代码注释）：
+1. **阈值更小（8MB vs Java 的 16MB）**：native 大块常走 mmap 不进 `allocated`，
+   单信号幅度天然更小，沿用 16MB 会漏判。
+2. **`UNKNOWN` 是独立状态**，不并进 `STABLE`：某信号本窗口读不到（如 ROM 拿不到
+   `summary.graphics`）时，必须与"没涨"区分开——否则"没读到"会被当成"没问题"。
+3. **不提供谷值包络**：Java 侧能用 `art.gc.gc-count` 定位 GC 谷值，native **没有 GC**，
+   所以本类**提供不了**等价物——要估 native 泄漏速率只能靠"多窗口确认 + 归因"。
+
+⚠️ 边界与 [§2.3](#23-趋势判据为什么是窗口最小值做基线而不是回归斜率) 完全一致：
+`SUSPECT` 只给"值得看一眼"，**不是泄漏的证明**。
+
+
+
 ### 2.3 趋势判据：为什么是"窗口最小值做基线"，而不是回归斜率
 
 **算法（刻意保持"能口算"）**：
@@ -364,6 +405,51 @@ native 归因路径 —— 这是本模块存在于"线上"场景的又一个理
 工具：[`tools/perfetto/record-heapprofd.sh`](../../../../../../../tools/perfetto/record-heapprofd.sh)
 （一条命令：选设备 → 验配置 → 抓取 → 自动点按 → 拉回 → 健康检查 → 出报告；
 脚本头部沉淀了六个实测坑，含上面的 SELinux 边界与判别方法）。
+
+### 3.7 映射级下钻：`SmapsReader`（补掉最后一块死角）
+
+前面三条归因路（alloc hook / Java 直方图 / BitmapTracker）有一个**共同盲区**：
+它们都是"分配器/虚拟机口径"，只看得见**经过我们代码或 ART 的映射**。
+真机上有一类现场三条路全都照不到：
+
+```
+Java 堆不涨、nativeAlloc 不涨、BitmapTracker 不涨 —— 但 VmRSS / totalPss 一路涨
+```
+
+这笔钱花在三方 .so、按需加载的 dex/oat、字体、GPU 驱动映射、命名匿名段上。
+**`smaps` 是内核给的逐映射账单，是唯一能把它落到"哪段地址、哪个文件、哪一类"的东西。**
+
+`SmapsReader` 就是这条下钻入口，先回答"涨的是哪一类"（`byCategory`），
+再回答"具体是哪个映射"（`top`）。真机实测（K40）：
+
+```
+映射条数=126 parsedLines=126 skippedLines=0     ← 与真实映射头数**精确对账**
+分类汇总（按 RSS 降序）：
+  代码/资源 (so/apk/dex/oat)   RSS= 2.87 MB PSS= 0.31 MB 63.9% ×56
+  其它文件映射                  RSS= 1.20 MB PSS= 0.25 MB 26.7% ×20
+  命名匿名段 (其它 [anon:...])   RSS= 0.31 MB PSS= 0.31 MB  6.9% ×34
+  分配器堆 (heap/malloc/scudo)  RSS= 0.07 MB PSS= 0.07 MB  1.7% ×1
+  线程栈                       RSS= 0.03 MB ...            ×1
+```
+
+**解析上的两个真坑**（都写进了注释与单测）：
+1. **头行不能用 `split(" ")`**：`[anon:dalvik-main space (region space)]` 这类名字**含空格**，
+   固定切分会切碎 —— 必须用正则一次抓全。
+2. **属性值不能按固定空格数切**：`Rss:  1234 kB` 冒号后可能是 1~N 个空格或制表符，
+   取第一个非空 token 才稳。
+
+**三种"行"要分开对待**（决定 `skippedLines` 是否可信）：
+空行 = 格式的一部分（不计数）；未知键（`SwapPss`/`Anonymous`/`Locked`/`THPeligible`…）
+= **静默忽略**（不同内核/ROM 属性行集合不同，把新键当错误会让监控在升级内核后全线失效）；
+只有"既非头行也非属性行"或"已知键值非法"才计入 `skippedLines`。
+
+⚠️ **三条诚实边界**：
+1. **RSS 是"共享页每份都算一份"的口径**。要看"我到底还欠多少不可回收的内存"必须看
+   **Private_Dirty**；要看系统层面占用才看 PSS。三者不能混着比。
+2. **一次 smaps 读是"重"的**（百 KB~MB + 毫秒级解析），所以它**不进 2s 采样热路径**，
+   只在显式排查/定时下钻时调用（实验页按钮已在后台线程执行）。
+3. **本类不做时间序列**：smaps 是单点快照，要判断"涨没涨"必须自己跨两次 diff
+   （拿 `startAddr` 做 key 对齐）。
 
 ---
 
@@ -711,10 +797,12 @@ trim / 水位是纯数值；页面标识来自 `Activity` 类名（**不含**用
    真机侧已实测的一条：**MIUI user build 上 heapprofd 无法归因 App 自己的 .so**
    （SELinux 拒绝读 App 文件 ⇒ unwind 失败 ⇒ 样本丢弃，M9）—— 跨工具验证
    在厂商 ROM 上要先确认这个前提，别把"工具看不见"当成"内存不存在"。
-8. ⚠️ **`smaps` 级映射聚合尚未独立成组件**（目前 native 走
-   `getNativeHeapAllocatedSize` + `nativePss` + `VmRSS` 三层口径）。
-   要做"到底哪个 .so / 哪段映射在涨"，需要逐行解析 `/proc/self/smaps`。
-9. 三条归因路径**都不回答**"这块内存该不该存在" —— 那是业务判断。
+8. ✅ **~~`smaps` 级映射聚合尚未独立成组件~~ → 已实现**（[`SmapsReader`](./SmapsReader.kt)，§3.7）。
+   真机实测 126 条映射**精确对账**（parsed == 真实映射头数）。仍存边界：
+   RSS 共享页重复计数（看 Private_Dirty 才准）、只读得到本进程、单点快照不做时序 diff。
+9. ⚠️ **Native 判决已独立**（[`NativeTrend`](#221-native-的独立判决nativetrend补掉一个真实漏判)，四信号分开判），
+   但它**没有 GC 谷值包络**——native 无强制回收，估泄漏速率只能靠多窗口 + 归因。
+10. 三条归因路径**都不回答**"这块内存该不该存在" —— 那是业务判断。
 
 ---
 
@@ -724,10 +812,12 @@ trim / 水位是纯数值；页面标识来自 `Activity` 类名（**不含**用
 |---|---|---|
 | 1 | ~~补周期性上报驱动~~ → **已实现**（周期 + 进后台 + 手动，`ReportDriver`） | 实测 M13 |
 | 2 | **真实 `upload` 出口 + 采样率远程可调 + 失败重试/退避** | 出口仍是模拟提交；且内存量比卡顿大，必须能被"拧小" |
-| 3 | `smaps` 逐行解析（映射级归因） | 边界 8 |
+| 3 | ~~`smaps` 逐行解析（映射级归因）~~ → **已实现**（`SmapsReader`） | 实测 M15，边界 8 |
 | 4 | 多窗口泄漏确认（连续三窗口 + trim 降级排除） | 边界 4 |
 | 5 | 位图归因补 `HardwareBitmap` 路径 | 边界 6 的差额来源之一 |
 | 6 | 真机复测（换 dlmalloc 设备验证 `malloc_info` 口径） | 边界 7 |
+| 7 | **native 判决的阈值远程可下发**（现为 8MB 启发式） | 与水位阈值同一条理由：机型差异大 |
+| 8 | smaps **跨两次采样 diff**（DMA 级别看"哪段在涨"） | 边界 8 的剩余项：现只做单点快照 |
 
 ---
 
@@ -879,3 +969,32 @@ memtrace： site#0 = 31,457,280 B(30.00 MB) / 30 calls / frames=4
           ⇒ 栈帧落在 App 自己 .so 的分配 unwind 失败 ⇒ 样本整个丢弃
 结论：   MIUI 真机上 heapprofd 不能当 App native 归因 oracle；本模块（bytehook+离线符号化）不受影响
 ```
+
+### M15 — Native 独立判决 + smaps 映射级归因（§2.2.1 / §3.7 的原始数字）
+```
+【单测】173 通过 / 0 失败（其中本轮新增：NativeTrend 14 条 + SmapsReader 13 条）
+        RealDumpTest 2 skipped（Assume，刻意不为假绿）
+
+【漏判回归】本次改动的**核心用例**（旧实现会漏）：
+  Java 堆恒 50MB（Trend ⇒ STABLE）+ nativeAlloc 40→80MB（净涨 40MB）
+  → 旧实现：只有 STABLE，**发不出任何事件**
+  → NativeTrend：SUSPECT，cause=「分配器净账与 RSS 同步上涨 ⇒ 优先怀疑我们自己的 native 分配」
+  阈值对照：同样涨 10MB，Java 阈值 16MB ⇒ STABLE；native 阈值 8MB ⇒ SUSPECT（刻意更小）
+
+【四信号分开判】读不到必须与没涨区分：
+  graphics 全 0（ROM 拿不到 summary.graphics）+ 其余三个涨
+  → 总判决 SUSPECT；GRAPHICS 信号单独记 UNKNOWN（不是 STABLE）
+  四个都读不到 ⇒ cause=「先查监控本身（ROM 差异/读权限），别急着查内存」
+
+【真机 smaps 对账】Redmi K40（Android 12 / MIUI），/proc/self/smaps 全量：
+  2807 行 → 映射条数=126 parsedLines=126 skippedLines=0（与真实映射头**精确相等**）
+  RSS 合计 4.49 MB | PSS 合计 0.98 MB
+  分类：代码/资源 63.9%(×56) > 其它文件映射 26.7%(×20) > 命名匿名段 6.9%(×34)
+        > 分配器堆 1.7%(×1) > 线程栈 0.7%(×1) > vdso/vvar 0.2%(×2) > 匿名 0.0%(×12)
+  解析边界实测通过：THPeligible（无 kB 的值行）与 SwapPss/Anonymous/Locked 等
+        未知键一律忽略；`Rss:` 后可变空格；`[anon:dalvik-main space (region space)]`
+        这类**含空格的路径**不被切碎。
+
+【进程构造】验证环境说明：取的是 toybox 根进程的 smaps（126 条、4.49MB），
+  目的是**验证解析器与真实内核输出的对账**，而非展示 App 的量级；
+  App 进程的 smaps 条数与体量都远高于此，但格式与解析路径完全相同。

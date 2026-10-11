@@ -35,6 +35,7 @@
             <option value="$PROJECT_DIR$/app" />
             <option value="$PROJECT_DIR$/build-logic" />
             <option value="$PROJECT_DIR$/build-logic/thread-plugin" />
+            <option value="$PROJECT_DIR$/ipc-lab" />
             <option value="$PROJECT_DIR$/scroll-event-demo" />
             <option value="$PROJECT_DIR$/thread-lint" />
             <option value="$PROJECT_DIR$/xshell" />

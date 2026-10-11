@@ -244,8 +244,10 @@ strings trace.perfetto | grep -c clinit            → 0
   全量模式 → 29.96 万条、**199 个 clinit**，累计 164ms。
   偶发一次的 clinit 必然被采样漏掉 —— 采样模式是给"找热点函数"用的。
   （`record-startup.sh` 默认走全量；要采样得显式 `--sampling <ms>`。）
-- ART 方法 trace 的 `ts/dur` 单位是**微秒**（`analyze_startup.py` 已按此解析）；
-  它本身也是合法 trace，可直接喂给 `trace_processor_shell`。
+- ART 方法 trace 里的 `ts/dur` 在**文件里**是微秒，但经 `trace_processor_shell`
+  导入后**统一换算成纳秒**（与相位 trace 一致，所以脚本里到处 `/1e6` 得毫秒）。
+  实测：`StabilityReporter.<clinit>` 原始 dur=4,306,000 → 4.3 ms（若当微秒就是 4.3 s，
+  对一个 clinit 不可能）。两种 trace 都能直接喂给 `trace_processor_shell`。
 
 ## 实测：本仓冷启动的账（Redmi K40 / Android 12，debug 包）
 
@@ -325,7 +327,73 @@ strings trace.perfetto | grep -c clinit            → 0
 >     -a com.interview.home.HomeActivity --analyze
 > ```
 
-## 怎么确认「阻塞点」：先分窗口，再分「等」和「干」
+## 分析脚本的原理
+
+一句话：**脚本自己不解析 trace,而是把两条 trace 分别喂给
+`trace_processor_shell`(Perfetto 官方解析器)做 SQL 查询,再把结果整理成人读的结论。**
+
+```
+tracer(设备) → .perfetto 文件 → trace_processor_shell 导入成 SQLite 表
+                                        ↑
+                          analyze_startup.py 通过 Python RPC 发 SQL
+```
+
+### 三个关键机制
+
+**① 依赖官方的 trace_processor,不自己写解析器。**
+`trace_processor_shell` 把二进制 trace 导入成一批 SQLite 表,核心几张:
+
+| 表 | 内容 | 脚本在哪用 |
+|---|---|---|
+| `slice` | 带名字/时间跨度的代码段 | 相位、clinit |
+| `thread` / `process` | 线程/进程元数据(含 `is_main_thread`) | 找主线程 |
+| `thread_state` | 线程调度状态(Running/S/D) | `[C]` 阻塞分析 |
+| `ftrace_event` / `raw` | 内核原始事件 | 排查溯源 |
+
+脚本用 `perfetto` Python 包走 RPC 查询(不是起子进程跑 SQL 文件),
+好处是结果**不做列宽截断**;找不到包时用仓库约定的 `uv run --with perfetto` 自动重入。
+
+**② 相位 trace:atrace 的 B/E 配对 → slice。**
+`view`/`gfx`/`am` 等分类开启后,框架在代码里插桩,往 ftrace 的 trace_marker
+写 `B|pid|名字`(begin)和 `E|pid|`(end)。实测 trace 里能看到
+`B|9832|AttachCurrentThread` 这类原始串;trace_processor 把它们按 **pid 配对**,
+begin/end 之间就是 `slice` 的 `ts/dur`。
+
+- `slice.ts` = B 的时间戳,`dur` = E − B;
+- 主线程用 `is_main_thread=1` 认(比"slice 最多的线程"可靠 —— RenderThread 的 slice 通常更多);
+- **`dur = -1` = 只看到 B 没看到 E**(进程被杀/抓取截断),脚本里到处用
+  `s.dur < 0` 兜这个 —— 这就是上一版 owner 列返 NULL 的根因。
+
+**③ ART 方法 trace:`am start --start-profiler` 的方法进出记录 → slice。**
+ART 在方法进入/退出时各记一条 call 记录(名 `类.方法: 签名`),先写进内存缓冲,
+`am profile stop` 时一次性 dump。trace_processor 把这些 call 记录**按时间还原成嵌套 slice**,
+所以 `<clinit>` 会以真实墙钟段出现在 `slice` 表里 —— 这是 Perfetto 相位 trace 拿不到的部分。
+
+### 一个必须知道的限制:两条 trace 不共享时间基准
+
+```
+相位 trace ts: 6584912117251970 …   (CLOCK_BOOTTIME 量级)
+ART  trace ts: 2348203965702000 …   (另一个时钟基准)
+```
+
+差着 4×10^15 ns。**所以脚本对两条 trace 各开一个 `TraceProcessor` 实例,
+靠"各自内部的时间"分别分析,绝不把两边的 `ts` 相减/对齐。**
+后果:
+
+- ✅ 相位 trace 答"哪个阶段多长"、ART trace 答"哪个方法/clinit 多长" —— 各自成立;
+- ❌ **不能**直接说"这个 clinit 落在 `app.onCreate` 的第几毫秒" ——
+  跨 trace 的时间对齐需要额外的时钟同步(perfetto 的 `clock_snapshot` / `trace_uuid`),
+  本脚本没做,也不假装做了。
+
+### 口径来自实测,不是猜的
+
+脚本里每段都对应一次真实踩坑,例如:
+- 判断"阻塞"必须先框启动窗口(全 trace 的 S 态 7740ms 里 99% 是 Looper 空闲);
+- `blocked_function` 靠 `sched/sched_blocked_reason` 事件填,缺了就全 NULL;
+- 该事件在 kernel 4.19 / perfetto v15 上 `caller` 解不出符号 —— 这些边界都写进了
+  README 与脚本注释,而不是当成"应该能用"。
+
+
 
 `analyze_startup.py` 的 `[C]` 段就是干这个的。核心是**两个不能跳过的区分**：
 

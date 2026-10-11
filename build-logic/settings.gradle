@@ -19,3 +19,4 @@ dependencyResolutionManagement {
 
 rootProject.name = 'thread-build-logic'
 include ':thread-plugin'
+include ':sdk-plugin'

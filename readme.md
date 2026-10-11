@@ -71,3 +71,35 @@
                             高度通过child的摆放行数 + 间距 确定；
             onLayout中：
                     对children按照measure中写入的每一行的顺序，整理 left、top、right、bottom 调用child的layout方法完成排部。
+
+## 2026-10-11 三方 SDK 治理工具（四维度）
+
+需求：① 确定每个 SDK 声明/真实使用哪些权限，没用怎么移除 ② 依赖重复与版本冲突
+③ 体积降低方向 ④ 三方 SDK 线程滥用治理。
+
+产出（新增，非文档而是能跑出报告的**工具**）：
+
+- [`docs/sdk-governance.md`](docs/sdk-governance.md) —— 设计说明 + 使用手册 + 面试答题稿
+- [`build-logic/sdk-plugin`](build-logic/sdk-plugin) —— Gradle 插件，编译期静态审计四维度
+- [`sdk-governance-runtime`](sdk-governance-runtime) —— 线程创建的运行时归因库（13 单测绿）
+
+```bash
+./gradlew :app:sdkAuditDebug                              # → app/build/reports/sdk-governance/
+./gradlew :sdk-governance-runtime:testDebugUnitTest       # 归因逻辑回归
+```
+
+实测摘要（本仓库 app/debug）：可移除权限 2 项（均危险权限，源码零使用证据）；
+版本冲突 53 组；依赖合计 68.65 MB（解压后，最大单项 material3 7.94 MB）；
+线程创建点 115 处（自有 62 / 三方 53）。
+
+三个值得一提的点（都是**静默错误**，已修复并留档）：
+1. Gradle `resolvedArtifacts` 是 `Set` 不保序 → 按下标配对 id↔文件会**静默错位**，
+   第一版报告里 `disklrucache` 报出 5.79 MB（实为 rxjava 的数），污染全部体积排名
+2. 权限判定条件写反 → 自有代码被判成「反射高发」，掩盖了最该看的结论
+3. 体积取自 ASM 非公开字段 `classFileLength` → ASM 升级时会静默给错数字
+
+关键词衔接：
+- 线程维度的**原理**在 [`线程治理/线程滥用与治理.md`](app/src/main/java/com/interview/线程治理/线程滥用与治理.md)，
+  本文补的是「**哪个 SDK 干的**」这个归因能力（Hook 点在 libc，加壳 SDK 也能抓到）
+- 体积的**工程开关**在 [`docs/package-size-optimization.md`](docs/package-size-optimization.md)，
+  本文补的是「**优化谁**」的归属定位

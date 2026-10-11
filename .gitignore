@@ -11,6 +11,7 @@
 /build
 /vmp-lab/build
 /vmp-core/build
+/sdk-governance-runtime/build
 /captures
 .externalNativeBuild
 .cxx

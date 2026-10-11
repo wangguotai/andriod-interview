@@ -4,8 +4,26 @@ plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.jetbrainsKotlinAndroid)
     id("com.interview.thread.monitor")
+    id("com.interview.sdk.governance")
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  三方 SDK 治理（静态审计）
+// ═══════════════════════════════════════════════════════════════════════
+//
+//  `./gradlew :app:sdkAuditDebug` → app/build/reports/sdk-governance/
+//     ├── sdk-audit.md    四个维度的人读报告（含证据与移除方案）
+//     └── sdk-audit.json  CI 卡口可消费
+//
+//  firstPartyPrefixes 决定「三方」的判定边界，因而决定权限归属的正确性。
+//  默认值刻意为窄（宁可漏报「可删权限」，也不误报成可删）：
+//  写太宽会让 SDK 的权限使用被当成自有代码用，从而**漏掉本该保留的权限**。
+configure<com.interview.sdk.plugin.SdkGovernanceExtension> {
+    firstPartyPrefixes.addAll(
+        "com.interview.",
+        "com.example.myapplication.",
+    )
+}
 
 // ═══════════════════════════════════════════════════════════════════════
 //  包体积优化开关（编译期）
@@ -292,6 +310,12 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.recyclerview)
+
+    // 三方 SDK 线程归因的运行时侧（Hook pthread_create 后的归因逻辑）。
+    // ⚠️ 它只是归因的「记录与报告」层；真正的线程创建 hook 点仍需 native 侧
+    //    （见 app/src/main/cpp/thread_hook.cpp 与 com.interview.thread.NativeThreadHook）——
+    //    两者是配套的，Java 层负责抓创建者堆栈并做责任方归因。
+    implementation(project(":sdk-governance-runtime"))
 
     // VMP 加固 Lab 的实现层（Rust 虚拟机 + JNI + VmpBridge + VmpLabActivity）。
     // 抽成 library 而不是在 app 里再抄一份：主页入口要求 Activity 在本 app 内，

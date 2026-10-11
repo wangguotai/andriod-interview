@@ -1,0 +1,43 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm' version '1.9.23'
+    id 'java-gradle-plugin'
+}
+
+group = 'com.interview.sdk'
+version = '1.0.0'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(17)
+    }
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+repositories {
+    maven { url 'https://maven.aliyun.com/repository/public' }
+    mavenCentral()
+    google()
+}
+
+dependencies {
+    // 与 thread-plugin 一致：AGP API 只用于读 Variant/Artifact，编译期可见即可。
+    compileOnly 'com.android.tools.build:gradle-api:8.3.0'
+    compileOnly 'org.jetbrains.kotlin:kotlin-stdlib:1.9.23'
+
+    // ASM：静态扫描依赖 jar/dex 里的字节码（线程创建点、权限相关 API 调用、类体积归属）。
+    implementation 'org.ow2.asm:asm:9.6'
+    implementation 'org.ow2.asm:asm-tree:9.6'
+    implementation 'org.ow2.asm:asm-commons:9.6'
+}
+
+gradlePlugin {
+    plugins {
+        sdkGovernance {
+            id = 'com.interview.sdk.governance'
+            implementationClass = 'com.interview.sdk.plugin.SdkGovernancePlugin'
+        }
+    }
+}

@@ -16,3 +16,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# simpleperf app_profiler.py 在**当前工作目录**生成的符号缓存（数百 MB，含从设备拉回的 .so/.oat）。
+# 在仓库根跑就落在仓库根 —— 挡掉，避免误入库。
+/binary_cache

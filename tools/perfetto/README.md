@@ -197,6 +197,136 @@ Android 12，滚动期间自动加载了 7 次，每次 +20 张）。app 侧帧�
 
 ---
 
+# 冷启动 / 静态代码块（`<clinit>`）排查线
+
+回答的问题：**冷启动的时间花在哪个阶段，静态代码块又是谁在拖？**
+
+```
+tools/perfetto/
+├── startup-trace.cfg     # 相位抓取配置（dalvik + view/gfx + am/wm + res）
+├── record-startup.sh     # 一条命令：相位 trace + ART 方法 trace 一起抓
+└── analyze_startup.py    # 相位给"阶段"，ART 方法 trace 给"每个 <clinit> 的墙钟"
+```
+
+## 最快用法
+
+```bash
+tools/perfetto/record-startup.sh -p com.example.myapplication \
+    -a com.interview.home.HomeActivity --analyze
+```
+
+产物（`out/` 下，已 gitignore）：
+- `<时间戳>-startup.perfetto` —— 相位 trace，拖进 <https://ui.perfetto.dev> 看
+- `<时间戳>-startup.art.trace` —— ART 方法 trace，静态代码块的**唯一来源**
+
+## ⚠️ 第一个坑：Perfetto 抓不到静态代码块
+
+`atrace` 的 `dalvik` 分类在这台 Android 12 上**只产出 ART native 切片**
+（`art::IndirectReferenceTable::Trim` / `TrimSpaces` / monitor contention），
+**不产出 Java 的 `<clinit>` / `InitializeClass` 切片**。实测：
+
+```
+strings trace.perfetto | grep -c clinit            → 0
+（system-wide 抓取也一样是 0）
+```
+
+所以「找静态代码块耗时」这件事，**单靠 Perfetto 走不通**。两个替代口：
+
+| 口径 | 命令 | 能否给出 `<clinit>` 墙钟 | 代价 |
+|---|---|---|---|
+| ART 方法 trace | `am start --start-profiler <f>` | ✅ 精确到方法 | 需 debuggable；有开销 |
+| simpleperf | `app_profiler.py --launch -g` | ⚠️ 只能给采样 + 部分栈 | 采样噪声大 |
+
+- **`--start-profiler` 是唯一能在进程启动前就开始采样的入口** ——
+  `am profile start` 要等进程起来，会**漏掉 `Application.<clinit>`**。
+- ⚠️ **不要加 `--sampling N`**：ART 的**采样模式根本不产出 `<clinit>` 记录**。
+  实测同一页面：`--sampling 1000` → 956 条方法记录、**0 个 clinit**；
+  全量模式 → 29.96 万条、**199 个 clinit**，累计 164ms。
+  偶发一次的 clinit 必然被采样漏掉 —— 采样模式是给"找热点函数"用的。
+  （`record-startup.sh` 默认走全量；要采样得显式 `--sampling <ms>`。）
+- ART 方法 trace 的 `ts/dur` 单位是**微秒**（`analyze_startup.py` 已按此解析）；
+  它本身也是合法 trace，可直接喂给 `trace_processor_shell`。
+
+## 实测：本仓冷启动的账（Redmi K40 / Android 12，debug 包）
+
+`am start -W` 的 `WaitTime≈3.0s` **不是 app 的锅**：那是 MIUI 上先 `am force-stop`
+再起、等待应用从被杀状态重新拉起 + 首次 dex 校验的时间，
+`TotalTime` 才是 app 自己的。拿相位 trace 算的 app 侧账：
+
+| 相位 | 耗时 | 说明 |
+|---|---|---|
+| `ActivityThreadMain` | 28 ms | 进程入口 |
+| `bindApplication` | **222 ms** | 其中 `app.onCreate` **132 ms** |
+| └ `Startup`（androidx.startup） | 14.6 ms | EmojiCompat / ProcessLifecycle / ProfileInstaller |
+| `activityStart`（含 performCreate） | **335 ms** | HomeActivity.onCreate |
+| └ 首帧 `traversal` | **276 ms** | `RV OnLayout` 217ms / `inflate` 263ms（TabLayout 25ms）/ `RV CreateView` 160ms |
+
+**`<clinit>` 全景（ART 方法 trace，共 199 个）**：累计 **164 ms**，
+其中自有代码 51 个、**40.2 ms**（数字来自全量方法 trace；采样模式会漏 clinit，见上）：
+
+| 类 | `<clinit>` | 根因 |
+|---|---|---|
+| `稳定性监控.StabilityReporter` | **17.2 ms** | 静态 `SimpleDateFormat("MM-dd HH:mm:ss.SSS")` → 里面 `initializeCalendar` 要拿时区 → `ZoneInfoDb` 载 tzdata |
+| `内存.MemoryMonitor` | 6.5 ms | 静态 `ConcurrentHashMap`/枚举/AtomicLong |
+| `稳定性监控.CrashJournal` | **6.2 ms** | 又一个静态 `SimpleDateFormat`（同上，**重复付时区代价**） |
+| `稳定性监控.MainThreadSampler` | 2.8 ms | 静态字段 |
+| `稳定性监控.StabilityMonitor` | 1.9 ms | |
+| `thread.ThreadPools` | 1.5 ms | 9 个 `Lazy` lane 的 lambda 类 |
+
+> 两个 `SimpleDateFormat` 合计 **23.1 ms**（17.2 + 6.2，同一轮）。
+> 这是全工程最容易摘的一颗果子 —— 且**第二个只省了一点**，说明时区数据的
+> 代价主要在**首次类初始化**（`ZoneInfoDb` / tzdata），不是每实例的。
+> 另有 `kotlin.jvm.internal.ClassReference.<clinit>` **51.6 ms**：它**不是**本仓
+> 手写的静态块，而是 `androidx.lifecycle` 在
+> `SavedStateHandleSupport.getSavedStateHandlesVM → Reflection.getOrCreateKotlinClass`
+> 里触发的 Kotlin 反射链路（`ClassReference` 的 clinit 要去载反射元数据）。
+> 这一段在库里，改动面大；但知道它存在，就不会把它误算到自己的静态块上。
+> `HomeCatalog.<clinit>` 只有 **8.5 ms**（14 个 `::class.java` 的直接引用 +
+> `listOf` 常量表），不是主要矛盾。
+
+**`app.onCreate` 132 ms 的真正大头**（ART 方法 trace 下钻）：
+
+| 调用 | 耗时 | 性质 |
+|---|---|---|
+| `MemoryMonitor.install` | **130 ms** | ⚠️ 见下 |
+| └ `MemoryMetrics.Sampler.start` | **128.8 ms** | 同步跑了一次 `capture()` |
+| └ `MemoryMetrics.capture` | **127.7 ms** | **在 `Application.onCreate` 里做 IO/Binder** |
+| └ `Debug.getMemoryInfo` | 71 ms | 读 `/proc/self/*` |
+| └ `ActivityManager.getProcessMemoryInfo` | 26 ms | Binder 到 system_server |
+| └ `readSelfStatus`（读 /proc） | 23 ms | |
+| └ `getHistoricalProcessExitReasons` | 11.7 ms | ExitInfo 回捞 |
+| `StabilityMonitor.installOnCreate` | 45.9 ms | 其中 `CrashJournal.beginSession` 24.4 ms（读+写状态文件） |
+| `NetClient.init` | 17.4 ms | 注册回调 + 读一次网络状态 |
+
+**结论**：`Sampler.start()` 里那句"立刻给一个基线点"的
+`runCatching { buffer.addLast(capture(context)) }` 是**同步**的，
+把一次完整的内存采集（71ms 的 proc 读取 + 26ms 的 Binder）直接压进了启动路径。
+`MemoryMonitor.install` 的注释写着"不阻塞启动"，但代码不是 —— 这是一个
+**注释与实现不一致**的真实缺陷。
+
+**优化方向（按性价比排序）**：
+1. `Sampler.start()` 的首次 `capture()` 挪到 `handler.post { }` 或首个 `tick` ——
+   基线点晚 2s 出现没有业务影响，但**省掉启动路径上 ~128 ms**。
+2. 两个静态 `SimpleDateFormat` → 改成 `ThreadLocal` 或首次使用时才建
+   （`SimpleDateFormat` 非线程安全，`ThreadLocal` 是标准解）。
+3. `CrashJournal.beginSession` 的读写文件挪到后台泳道（它只是标记，晚 100ms 无影响）。
+4. 首帧的 `RV OnLayout` 217ms / `inflate` 263ms 是**另一条线**（首屏布局），
+   与静态块无关，见上半篇的滚动卡顿排查法。
+5. （库侧）`ClassReference` 反射链 51.6ms 由 androidx.lifecycle 触发，
+   换 ViewModel 恢复路径或升级 androidx.lifecycle 可能规避，改动面大，优先级低。
+
+> ⚠️ 上面 132ms / 128ms 是 **debug 包 + ART 方法 trace 插桩**下的数字，
+> 绝对值会偏高（插桩本身有开销）；**相对排序可信，绝对值要拿 release 复测**。
+> 但"同步 capture 阻塞启动"这个**结构问题**与构建类型无关。
+>
+> 复现命令：
+> ```bash
+> tools/perfetto/record-startup.sh -p com.example.myapplication \
+>     -a com.interview.home.HomeActivity --analyze
+> ```
+
+---
+
 # heapprofd：native 堆分配剖析（内存归因线）
 
 回答另一个问题：**native 内存涨了，到底哪行代码要的？**

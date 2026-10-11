@@ -3,3 +3,8 @@ out/
 
 # analyze_trace.py 在本地缺少 trace_processor_shell 时自动下载到这里
 bin/
+
+# simpleperf 的 app_profiler.py 会把设备上的 .so / .oat 拉到 ./binary_cache（可达数百 MB），
+# 而且它是**相对当前目录**生成的 —— 在 tools/perfetto 下跑会落在 tools/perfetto/binary_cache，
+# 在仓库根跑就落在仓库根。两处都挡掉。
+binary_cache/

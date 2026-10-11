@@ -6,6 +6,47 @@ plugins {
     id("com.interview.thread.monitor")
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════
+//  包体积优化开关（编译期）
+// ═══════════════════════════════════════════════════════════════════════
+//
+//  语义与用法见 gradle.properties 的说明块。这里只做一件事：
+//  把 gradle.properties / -P 的字符串开关收敛成 Boolean，并在下面生效。
+//
+//  默认全 false ⇒ 日常构建产物与优化前**完全一致**（可回退、可对照）。
+//  一键全开:  ./gradlew :app:assembleRelease -Popt.all
+//
+//  opt.all 展开为 shrink + audit。**不含 webp**：webp 会改写工作区源文件，
+//  必须是显式动作，不能被一个"全开"顺手带上。
+// ───────────────────────────────────────────────────────────────────────
+// ─── 开关解析 ───
+// 必须区分三种输入，否则开关会"静默失效"（本文件第一版就栽在这）：
+//   · -Popt.shrink               → 值为空串。**必须视为 true** ——
+//                                  "写了这个 flag 就是想要它开"，这是命令行惯例
+//   · -Popt.shrink=true / 1 / yes → true
+//   · -Popt.shrink=false          → false（可用于覆盖 gradle.properties）
+// 只写 toBooleanStrictOrNull() 会让 `-Popt.shrink`（无值）解析成 false，
+// 表现为"打开了开关但构建产物毫无变化"——最容易误判成"R8 没效果"。
+fun optFlag(name: String): Boolean {
+    if (!project.hasProperty(name)) return false
+    return when ((project.findProperty(name) as? String)?.trim()?.lowercase()) {
+        null, "", "true", "1", "yes", "on" -> true
+        else -> false
+    }
+}
+
+val optAll = optFlag("opt.all")
+val optShrink = optAll || optFlag("opt.shrink")
+val optAudit = optAll || optFlag("opt.audit")
+val optWebp = optFlag("opt.webp")
+val optWebpApply = optFlag("opt.webp.apply")
+
+logger.lifecycle(
+    "[opt] shrink=$optShrink audit=$optAudit webp=$optWebp(apply=$optWebpApply)" +
+        if (!optShrink && !optWebp) " —— 全部关闭，构建行为与优化前一致" else "",
+)
+
 configure<com.interview.thread.plugin.ThreadMonitorExtension> {
     enableNaming.set(true)
     enableUnify.set(true)
@@ -52,9 +93,31 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // ─── R8：代码压缩 + 资源压缩（opt.shrink 开关）───
+            //
+            // 本仓库实测：release APK 的 dex 占解压后 81%（20.4 MB / 22.4 MB），
+            // 而此前 isMinifyEnabled=false ⇒ R8 完全没跑。这是体积优化里最大
+            // 的一根杠杆，收益远大于资源与 native 层。
+            //
+            // ⚠️ 风险边界：R8 漏 keep 的后果是**运行时崩溃 / 静默数据丢失**，
+            //    而不是编译失败。app/proguard-rules.pro 已按「Retrofit 代理 /
+            //    Gson 字段名 / JNI 符号 / ASM 改写落点」四类补齐（每类都写了
+            //    理由），但首次打开仍必须跑真机回归。
+            isMinifyEnabled = optShrink
+            // 资源压缩：删掉未被引用的 res。必须与 minify 同开 —— 它依赖 R8
+            // 产出的引用图；单独开只会退化。注意 release 默认 false。
+            isShrinkResources = optShrink
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            // 体积包需要 mapping 才能还原崩溃栈。R8 默认就该产出；
+            // 这里显式打开，避免 archive 配置变化时被悄悄关掉。
+            if (optShrink) {
+                isDebuggable = false
+            }
         }
+        // debug 侧不参与体积优化：Lab 依赖未裁剪的 dex/资源做对照演示
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
@@ -79,6 +142,31 @@ android {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+
+    // ─── 交付层：AAB（opt.shrink 时随 release 一起可用）───
+    // `:app:bundleRelease` 产物由 Play 按设备切分，安装包通常再降一截。
+    //
+    // 实测（本仓库 opt.shrink 构建）：
+    //   APK 6.05 MB（native .so 为 mmap 而**不压缩**存储）
+    //   AAB base 模块 3.57 MB（Play 下发给单台 arm64 设备的量）
+    //   差额主要来自：AAB 里 .so 是压缩的（3.49→1.70 MB），加上资源分片。
+    //
+    // 下面只开语言/密度分片：本 app 是中文教学工程，但依赖库自带多语言，
+    // 不分片会让 AAB 为每门语言各带一份。APK 单文件交付时无法这么排
+    // （系统语言是英文的设备会缺字串），AAB 由 Play 只下发匹配分片才敢排。
+    bundle {
+        language {
+            enableSplit = true
+        }
+        density {
+            enableSplit = true
+        }
+        // abi.enableSplit：**故意不设置**。
+        //   它默认为 true，AGP 会在配置期按当前 ABI 过滤集自动适配 —— 未来
+        //   谁给 rust/vmp-android 补上 armeabi-v7a，分片会自动跟着开。
+        //   硬写 false 会把这个自动适配钉死，反而要让后人回来改这行。
+        //   （本仓库当前只有 arm64-v8a，开与不开的产物无差别，故无需显式声明。）
     }
 
     testOptions {
@@ -240,4 +328,72 @@ dependencies {
     // 可选扩展库
     implementation(libs.adapter.rxjava3)  // RxJava支持
     implementation(libs.logging.interceptor) // 网络日志
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  最终任务：无用资源 / 无用代码审计（opt.audit 开关）
+// ═══════════════════════════════════════════════════════════════════════
+//
+//  为什么是"报告"而不是"自动删除"：
+//    · 资源是否无用，静态分析给不出确定答案 —— getIdentifier() 拼接的资源名、
+//      data-binding、以及本仓库 HomeCatalog 这类"登记式"入口都会让静态引用图
+//      偏保守（漏报）或偏激进（误删）。
+//    · 真正安全的自动删除只有一条路：R8 的 shrinkResources。它基于**编译期
+//      真实引用图**，且 R8 会自己保留不确定项。所以本任务只负责"指出来"，
+//      删除动作统一交给 opt.shrink —— 一个入口，一个真相。
+//
+//  产出（app/build/reports/opt/）：
+//    unused-resources.txt  ← lint UnusedResources（含可能被反射引用的存疑项）
+//    removed-code.txt      ← R8 实际删掉的类/成员（前提：opt.shrink 已开）
+//    mapping.txt           ← 混淆映射，解崩溃栈用
+//    报告完成后在命令行打印 Top 项，避免"生成了但没人看"。
+// ───────────────────────────────────────────────────────────────────────
+if (optAudit) {
+    val optReportDir = layout.buildDirectory.dir("reports/opt")
+
+    val auditUnusedResources by tasks.registering {
+        group = "opt"
+        description = "汇总 R8 的 usage.txt（真实删除清单）到 reports/opt/"
+        outputs.dir(optReportDir)
+        doLast {
+            val out = optReportDir.get().asFile.apply { mkdirs() }
+
+            // usage.txt 是**编译期真实可达性分析**的产物，比任何静态猜测都准。
+            // 本任务在 assembleRelease 之后跑（finalizedBy），此时它一定已生成。
+            val usageFiles = layout.buildDirectory.dir("outputs/mapping")
+                .get().asFile.walkTopDown()
+                .filter { it.name == "usage.txt" }.toList()
+
+            if (usageFiles.isEmpty()) {
+                println("[opt] 未找到 usage.txt —— 说明这次不是 opt.shrink 构建。")
+                println("[opt] 跑: ./gradlew :app:assembleRelease -Popt.shrink")
+                return@doLast
+            }
+
+            val merged = usageFiles.flatMap { it.readLines() }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() && !it.startsWith("#") }
+                .distinct()
+                .sorted()
+            out.resolve("removed-code.txt").writeText(merged.joinToString("\n") + "\n")
+
+            // 映射（解 release 崩溃栈用）——顺手拷到统一目录，免得到 mapping/ 下翻
+            layout.buildDirectory.dir("outputs/mapping/release").get().asFile
+                .resolve("mapping.txt").takeIf { it.exists() }
+                ?.let { it.copyTo(out.resolve("mapping.txt"), overwrite = true) }
+
+            println("[opt] removed-code.txt: ${merged.size} 行 → $out")
+            println("[opt] 提示: 若 com/interview/** 的**整类**出现在这里，")
+            println("[opt]       先核对 app/proguard-rules.pro —— 也可能是只删了空 <clinit>（正常）。")
+            println("[opt]       判据：同时搜 mapping.txt，映射到自身 = 类保留。")
+        }
+    }
+
+    // 用 matching().configureEach 而不是 tasks.named：
+    // AGP 在 afterEvaluate 里才注册 assembleRelease —— 本文件是**配置期**执行，
+    // 直接 tasks.named("assembleRelease") 会报 "Task not found"（已实测踩到）。
+    // matching 返回惰性集合，对之后新增的任务同样生效。
+    tasks.matching { it.name == "assembleRelease" }.configureEach {
+        finalizedBy(auditUnusedResources)
+    }
 }

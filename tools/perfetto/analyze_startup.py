@@ -144,7 +144,85 @@ def analyze_phase(tp, pkg):
                  f"(select id from thread_track where utid={utid}) and name glob 'Choreographer#doFrame*'")
     if r and r[0][0]:
         print(f"\n最长一帧 (Choreographer#doFrame)：{r[0][0]} ms   ← 冷启动首帧通常最贵")
+
+    analyze_blocking(tp, utid)
     print("\n提示：把相位 trace 拖进 https://ui.perfetto.dev 可交互看时间轴。")
+
+
+def analyze_blocking(tp, utid):
+    """[C] 主线程阻塞点：把「等」从「干」里分出来，再定位到具体代码。
+
+    关键区分（不区分就会得出完全相反的结论）：
+      · 整个 trace 的 S 态 ≈ 几秒 → 几乎全是 Looper 空闲（MessageQueue.next），**不是你说的阻塞**。
+      · 必须**先框出启动窗口**（首个主线程 slice → 首帧结束），再看窗口内的状态分布。
+      · 窗口内 Running 占大头 = CPU 密集（计算/类加载/inflate），不是 IO/锁等待；
+        S/D 才有意义，逐个下钻到"被哪个 slice 卡住"。
+    口径见 tools/perfetto/README.md「阻塞点」一节。
+    """
+    print()
+    print("=" * 74)
+    print("[C] 主线程阻塞点（启动窗口内的 Sleeping / Uninterruptible）")
+    print("=" * 74)
+
+    t0 = rows(tp, f"select min(ts) from slice where track_id in "
+                  f"(select id from thread_track where utid={utid})")
+    if not t0 or not t0[0][0]:
+        print("⚠ 拿不到主线程首个 slice，跳过。")
+        return
+    start = t0[0][0]
+
+    # 首帧结束 = 启动窗口右边界（找不到首帧就取 3s）
+    f = rows(tp, f"select max(ts+dur) from slice where track_id in "
+                 f"(select id from thread_track where utid={utid}) "
+                 f"and name glob 'Choreographer#doFrame*' and ts < {start}+3000000000")
+    end = f[0][0] if f and f[0][0] else start + 3000000000
+    print(f"启动窗口：[0, {(end - start) / 1e6:.0f} ms]（主线程首个 slice → 首帧结束）")
+
+    st = rows(tp, f"select state, count(*) n, round(sum(dur)/1e6,1) total_ms, round(max(dur)/1e6,2) max_ms "
+                  f"from thread_state where utid={utid} and ts>={start} and ts+dur<={end} "
+                  f"and dur>0 group by state order by sum(dur) desc")
+    table(["state", "n", "total_ms", "max_ms"], st or [])
+    run = next((r[2] for r in (st or []) if r[0] == "Running"), 0) or 0
+    sleep = sum(r[2] for r in (st or []) if r[0] in ("S", "D")) or 0
+    print()
+    if run >= sleep:
+        print(f"  ⇒ Running {run:.0f} ms ≥ 等待 {sleep:.0f} ms：启动是 **CPU 密集**"
+              f"（计算 / 类加载 / inflate），不是 IO 或锁等待主导。")
+    else:
+        print(f"  ⇒ 等待 {sleep:.0f} ms > Running {run:.0f} ms：**阻塞主导**，看下表定位。")
+
+    print("\n窗口内最长的阻塞块（S=可中断睡眠 / D=不可中断）及其所属代码")
+    # ⚠️ 不少 phase slice（app.onCreate / binder transaction）的 dur = -1（未闭合），
+    #    用 `s.ts+s.dur >= ts.ts` 会因 -1 而漏判。必须把 dur<0 当作"延伸到 trace 末尾"。
+    blk = rows(tp, f"""
+        select round((ts.ts-{start})/1e6,1) rel_ms, ts.state, round(ts.dur/1e6,2) block_ms,
+          (select s.name from slice s
+             where s.track_id in (select id from thread_track where utid={utid})
+               and s.ts <= ts.ts and (s.dur < 0 or s.ts+s.dur >= ts.ts)
+             order by s.depth desc limit 1) owner
+        from thread_state ts
+        where ts.utid={utid} and ts.state in ('S','D')
+          and ts.ts>={start} and ts.ts+ts.dur<={end} and ts.dur>1000000
+        order by ts.dur desc limit 15""")
+    table(["rel_ms", "state", "block_ms", "所属 slice"], blk or [])
+
+    # 全局 S 态提醒：防止把 Looper 空闲当阻塞。
+    # 不用"是否属于 MessageQueue.next"去判（深嵌套下 slice 归属不可靠），
+    # 直接对比「窗口内」与「全 trace」的 S 态 —— 差额就是启动后的 Looper 空闲。
+    glob = rows(tp, f"select round(sum(dur)/1e6,0) from thread_state where utid={utid} and state='S'")
+    if glob and glob[0][0]:
+        print(f"\n  ⚠ 全 trace 主线程 S 态共 {glob[0][0]:.0f} ms，启动窗口内只有 {sleep:.0f} ms"
+              f"（差额 ≈ 启动后的 Looper 空闲）。**别拿全 trace 的 S 当阻塞** ——"
+              f"只有启动窗口内、且所属 slice 不是 MessageQueue.next 的才是真阻塞。")
+
+    # blocked_function 可用性
+    bf = rows(tp, f"select count(blocked_function) from thread_state where utid={utid} and state in ('D','S')")
+    if bf and bf[0][0] == 0:
+        print("\n  ⚠ thread_state.blocked_function 全为 NULL ⇒ 看不出内核态阻塞原因。")
+        print("    cfg 需订阅 sched/sched_blocked_reason（本仓 startup-trace.cfg 已加）。")
+        print("    但注意：在部分内核（如实测 kernel 4.19 / perfetto v15）上该事件的")
+        print("    caller 字段被解成无效小整数，符号映射不出来 —— 此时靠上表的")
+        print("    「所属 slice」+ 「被谁唤醒」定位，见 README。")
 
 
 def analyze_art(tp, pkg, top_n):

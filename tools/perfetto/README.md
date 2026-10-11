@@ -325,6 +325,52 @@ strings trace.perfetto | grep -c clinit            → 0
 >     -a com.interview.home.HomeActivity --analyze
 > ```
 
+## 怎么确认「阻塞点」：先分窗口，再分「等」和「干」
+
+`analyze_startup.py` 的 `[C]` 段就是干这个的。核心是**两个不能跳过的区分**：
+
+**① 先框出启动窗口** —— 不框就会得出完全相反的结论。
+
+主线程在 trace 里的 S 态累计往往有好几秒（实测本仓 **7740 ms**），
+但那**几乎全是启动完成后的 Looper 空闲**（`MessageQueue.next` 阻塞等消息），
+不是你说的卡顿。真正的启动窗口只有 **1520 ms**（主线程首个 slice → 首帧结束），
+窗口内 S 只有 **80 ms**。拿全 trace 的 S 当阻塞，会把空闲算成瓶颈。
+
+**② 窗口内再分「等」和「干」**：
+
+| 状态 | 含义 | 本仓窗口内 |
+|---|---|---|
+| `Running` | 真在 CPU 上跑 | **1407 ms** ← 大头 |
+| `S` | 可中断睡眠（binder / futex / 锁） | 77 ms |
+| `D` | 不可中断（磁盘 IO），超过 ~700ms 就是 IO 卡死 | 2.5 ms |
+| `R` / `R+` | 就绪但没排上 CPU（**被抢占**，不是阻塞） | 31 ms |
+
+⇒ Running ≫ 等待，说明本仓冷启动是 **CPU 密集**（类加载 / inflate / 计算），
+**不是 IO 或锁等待主导**。「阻塞点」到这里就只有 80 ms 的量级，逐个下钻即可：
+
+```
+rel_ms  state  block_ms  所属 slice
+226.8   S      21.74     binder transaction     ← AMS 事务
+1306.9  S      14.38     binder transaction
+779.7   S      11.52     binder transaction
+104.4   D      1.11      setSystemFontMap       ← 读字体文件
+```
+
+**怎么定位到具体代码**：拿每个阻塞块的 `ts`，去主线程 slice 里找**包含它的最深 slice**
+（`s.ts <= X and (s.dur < 0 or s.ts+s.dur >= X)` —— `dur<0` 是未闭合 slice，
+漏了这个条件会大量漏判，实测 `app.onCreate` / `binder transaction` 的 dur 就是 -1）。
+
+**`blocked_function` 的口径与坑**：`thread_state.blocked_function` 本应直接给出
+内核阻塞原因（`futex_wait_queue_me` / `do_epoll_wait` …），它由
+`sched/sched_blocked_reason` 事件填充 —— **`startup-trace.cfg` 已订阅**。
+但实测（Redmi K40 / kernel **4.19** / perfetto **v15**）该事件的 `caller`
+字段被解成无效小整数（`%pS` 没生效），**符号映射不出来**，该列仍是 NULL。
+此时用上面的「所属 slice + 相对时刻 + 被谁唤醒」定位，结论不受影响。
+
+> 若换了新内核想用 `blocked_function`：抓完先跑
+> `select count(blocked_function) from thread_state where state in ('D','S')`，
+> 非 0 就说明能直接读函数名。
+
 ---
 
 # heapprofd：native 堆分配剖析（内存归因线）

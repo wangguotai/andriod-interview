@@ -122,6 +122,29 @@ RecyclerView 1.3.2 源码里内置了 `TraceCompat` 段（`RecyclerView.java:329
   第 2 条，命令行分析仍能跑对**——但 Perfetto UI 的轨道会挂在 `zygote64` 下，很难找。
 - **配置和 trace 的路径**：`perfetto` 只保证能读 `/data/misc/perfetto-configs`、
   能写 `/data/misc/perfetto-traces`。放 `/data/local/tmp` 会 `errno 13 Permission denied`。
+- **⚠️ 只订阅 `binder/binder_transaction` 会摧毁所有 atrace 相位**（真机实测，很隐蔽）：
+  Perfetto 里 binder 事务是**成对**事件 —— `binder_transaction`（发起）＋
+  `binder_transaction_received`（到达）等。若配置里**只写 `binder_transaction`**、
+  漏掉配对方，trace_processor 会积压 ~8500 个**永远配对不上、`dur=-1` 的 binder
+  slice**，并进而打乱这些线程的 slice 栈 —— 表现是
+  `bindApplication` / `app.onCreate` / `activityStart` / `performCreate` 这些
+  atrace 埋点的 `dur` **全变成 -1**，启动相位直接报废（但 trace 里 atrace 的 B/E
+  原始 print 事件一个不少，所以**光看事件数会误判"没丢数据"**）。
+  实测隔离矩阵（每次全新冷启动抓取，仅改 ftrace_events）：
+
+  | ftrace_events | unclosed slice | 关键相位 dur |
+  |---|---|---|
+  | `sched_switch`+`sched_waking`+`task_rename`+`task_newtask` | 5 | ✅ 正常 |
+  | ＋`kmem/mm_page_alloc`＋`input` 分类＋frametimeline | 3 | ✅ 正常 |
+  | ＋**`binder/binder_transaction`（单独）** | **8513** | ❌ 全部 -1 |
+  | ＋`sched/sched_blocked_reason` | 5 | ✅ 正常 |
+
+  **结论**：要么不订阅 binder（本站排查启动耗时用不到，`startup-trace.cfg` 已删掉），
+  要么把 `binder_transaction_received` / `binder_transaction_alloc_buf` 等配对方
+  **一并订阅**（系统自动开 binder 时就是整组，所以那样配不会出问题）。
+  判别手法：`select count(*) from slice where dur<0` 突然上千、且
+  `select name,count(*) from slice where dur<0 group by name` 里全是
+  `binder transaction` → 就是踩了这个。
 - **多设备**：模拟器和真机同时连着时**必须** `-s <serial>`，否则容易在真机上误抓。
 - **trace_processor_shell 按行切分 SQL**：写 SQL 时**必须单行**，多行会被截断报语法错。
 - **下载源**：`commondatastorage.googleapis.com` 可能不通（`perfetto` Python 包默认走它）；

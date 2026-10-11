@@ -327,7 +327,87 @@ strings trace.perfetto | grep -c clinit            → 0
 >     -a com.interview.home.HomeActivity --analyze
 > ```
 
+## 两种 trace 的区别（同一台设备、同一次抓取）
+
+`record-startup.sh` 会产出两个文件，**格式、来源、能看到的东西完全不同**，
+互补而非重复。以下数字都是在 Redmi K40 / Android 12 上实测同一轮的产物。
+
+| | 相位 trace `*-startup.perfetto` | ART 方法 trace `*-startup.art.trace` |
+|---|---|---|
+| 文件格式 | **protobuf**（magic `0a6e`，二进制） | **文本**（magic `*version\n3\n`） |
+| 产出者 | `perfetto` traced 服务 | ART 运行时（`am start --start-profiler`） |
+| 采集方式 | ftrace（内核 ring buffer 流式） | 方法插桩（进入/退出各记一条，写内存缓冲） |
+| 覆盖范围 | **全系统**：878 进程 / 5470 线程 | **仅本 app**：1 进程 / 19 线程 |
+| 核心表：slice | 63,750 | 299,644 |
+| 核心表：thread_state | **172,294** | **0**（无调度事件） |
+| 核心表：ftrace_event | **290,457** | **0** |
+| frametimeline | **428**（有掉帧归因） | 0 |
+| 体积（同一轮） | 15 MB | 8.9 MB |
+| 抓取开销 | 低（内核侧采样） | **高**（每次都插桩，`clock-call-overhead-nsec=442`） |
+
+### 能力对照：同一个调用，两条 trace 各能看到什么
+
+以 `MemoryMonitor.install` 为例（实测同一份代码）：
+
+| 问题 | 相位 trace | ART 方法 trace |
+|---|---|---|
+| `MemoryMonitor.install` 花了多久？ | ❌ 查不到（`glob '*MemoryMonitor*'` → **0 行**） | ✅ **51.03 ms** |
+| `app.onCreate` 花了多久？ | ✅（atrace 埋点，如 132 ms） | ✅（如 210 ms，但两轮波动大，见下②） |
+| 主线程在等还是在跑？ | ✅ **只有它有**（`thread_state` S/D/Running） | ❌ 无调度数据 |
+| 谁被 CPU 抢占 / 在哪个核？ | ✅（sched_switch + cpu） | ❌ |
+| 掉帧了没、算谁头上？ | ✅（`jank_type` 归因） | ❌ |
+| `<clinit>` 谁最慢？ | ❌ **0 行**（见下） | ✅ 199 个，逐个给墙钟 |
+| 方法级调用树？ | ❌ 只有手写埋点 | ✅ 全量（29.9 万条） |
+
+**一句话选型**：
+- 问"**哪个阶段**慢 / 等在哪 / 掉帧算谁的" → 相位 trace
+- 问"**哪个方法/静态块**慢" → ART 方法 trace
+
+### 三点必须注意的差异
+
+**① atrace 埋点是"稀疏的"，且不含自有 Java 方法。**
+相位 trace 只能看到**框架预先埋好**的点（`app.onCreate` / `inflate` / `RV OnLayout`
+这类），你自己的 `MemoryMonitor.install` 之类**一个都没有**（实测查 0 行）。
+ART trace 则是**全量方法**，连 `<clinit>` 都在。
+
+**② ART trace 有插桩开销，绝对值不稳定 —— 只信排序，别信绝对值。**
+文件头有硬证据：`clock-call-overhead-nsec=442` —— 每次方法调用多花 442ns。
+但实测同一份代码、不同轮次，`MyApplication.onCreate` 的量级是：
+
+| 轮次 | ART 方法 trace | 相位 trace (atrace) |
+|---|---|---|
+| 15:50 抓取 | 210.5 ms | 131.9 ms |
+| 16:46 抓取 | 76.5 ms | （该轮 slice 未闭合，取不到） |
+
+两轮差 3 倍，且 ART 时而高于 atrace、时而低于。原因有二：
+插桩开销（442ns/调用，调用上万次就累加）＋ 两者界定的**起止点不完全一致**
+（atrace 从 `callApplicationOnCreate` 到返回，ART 是方法自身的进出）。
+
+⇒ 结论：**ART trace 用来比"谁比谁慢"（同一轮内的排序可靠），
+不要用来报绝对值。** 要准的绝对值用相位 trace 里已闭合的 atrace 数字，
+或 release 包 + simpleperf。
+
+**③ 两者的时间基准不同（这是最容易被忽略的）。**
+ART 文件头是 `clock=dual`，含 `elapsed-time-usec=13442956`（13.44s），
+而相位 trace 的 `ts` 是 CLOCK_BOOTTIME 量级，两者**不能相减**。
+所以脚本对两条 trace 各开一个 `TraceProcessor`，各自内部算，绝不跨 trace 对齐。
+同一个 `MemoryMonitor.install`，ART trace 给 51ms；另一轮相位 trace 里
+最接近的对应块是 128ms —— **这不能相减、也不能说"差 77ms"**：
+是两次抓取 + 两种口径（插桩 vs atrace），不是同一次测量。
+
+### 怎么按需求只用一条
+
+```bash
+# 只要相位（快、开销低、能看系统侧）
+adb shell perfetto -c startup-trace.cfg --txt -o t.perfetto
+# 只要 ART 方法级（找慢方法/静态块，必须 debuggable）
+adb shell am start -W --start-profiler /data/local/tmp/t.trace -n pkg/Act
+# 两条都要
+tools/perfetto/record-startup.sh -p pkg -a Act --analyze
+```
+
 ## 分析脚本的原理
+
 
 一句话：**脚本自己不解析 trace,而是把两条 trace 分别喂给
 `trace_processor_shell`(Perfetto 官方解析器)做 SQL 查询,再把结果整理成人读的结论。**

@@ -79,6 +79,16 @@ object HomeCatalog {
             activityClass = com.interview.vmp.ui.VmpLabActivity::class.java,
             tag = "vmp",
         ),
+        HomeEntry(
+            title = "插件化 Lab",
+            subtitle = "独立打包的 dex + 资源隔离 + 网络下发（宿主里没有插件字节）",
+            // ⚠️ 这一条与上面 VMP 那条恰好形成对照：
+            //    VMP 的实现是 library（**编进宿主**），插件化的实现是**另一个 apk**。
+            //    这里登记的只是宿主侧的装载与实验页；插件本体不在宿主里 ——
+            //    入口必须在宿主内，能力可以在宿主之外，这正是本 Lab 的命题。
+            activityClass = com.interview.plugin.PluginLabActivity::class.java,
+            tag = "plugin",
+        ),
     )
 
     /** 基础：单点知识 / 控件练习页 */

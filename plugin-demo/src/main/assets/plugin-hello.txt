@@ -1,0 +1,13 @@
+插件 assets/plugin-hello.txt
+────────────────────────────
+这个文件在 plugin-demo.apk 的 assets/ 目录里。
+
+判定方法（两条，都可执行）：
+  1) unzip -l app/build/outputs/apk/debug/app-debug.apk | grep plugin-hello
+     → 空。宿主 apk 里没有这个文件。
+  2) unzip -p build/plugin-debug.apk assets/plugin-hello.txt
+     → 就是本文件内容。
+
+它证明的是：宿主构造的 AssetManager 通过 addAssetPath() 挂上了插件 apk 之后，
+assets 这一层（非 resources.arsc 的那部分）也能被读到。
+很多"插件化"实现只处理了 resources.arsc，assets 会漏 —— 那类包一读 assets 就崩。

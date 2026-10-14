@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  插件自己的布局。放在插件 APK 的 resources.arsc 里。
+
+  证明它"来自插件"的办法：宿主对同一个 ID 调 getString/getLayout 会抛
+  Resources$NotFoundException —— 因为宿主的资源表里没有这个条目。
+  宿主页的"资源隔离对照"按钮就是跑这件事。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/plugin_panel"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:drawablePadding="6dp"
+        android:gravity="center_vertical"
+        android:text="@string/plugin_layout_line1"
+        android:textColor="@color/plugin_text_strong"
+        android:textSize="13sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/plugin_layout_line2"
+        android:textColor="@color/plugin_text"
+        android:textSize="11sp" />
+
+    <ProgressBar
+        android:layout_width="match_parent"
+        android:layout_height="6dp"
+        android:layout_marginTop="8dp"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:max="100"
+        android:progress="66" />
+</LinearLayout>

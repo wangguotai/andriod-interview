@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  插件化 Lab 的宿主页面。
+
+  设计原则（沿用本仓库其它 Lab 页的同一条）：**每个按钮对应一条可证伪的断言**。
+  输出区是 monospace + 可选中，因为这里的结论经常需要贴到别处或对照命令行输出。
+
+  ⚠️ 布局里不出现插件的任何资源 —— 宿主连插件的 layout 名字都不引用，
+     这正是"宿主里没有插件的字节"在 UI 层的体现。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="插件化 Lab：独立 dex + 资源隔离 + 网络下发"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="插件模块 :plugin-demo（宿主 apk 里没有它的类与资源）"
+        android:textSize="11sp" />
+
+    <!-- ① 三条来源 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_load_assets"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="① assets 加载" />
+
+        <Button
+            android:id="@+id/btn_load_dir"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="② 私有目录加载" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/et_manifest_url"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:hint="plugin-package.xml 的 https 地址（留空则用下方默认值）"
+        android:inputType="textUri"
+        android:textSize="11sp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_load_net"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="③ 网络下载并加载" />
+
+        <Button
+            android:id="@+id/btn_launch_activity"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="④ 拉起插件 Activity" />
+    </LinearLayout>
+
+    <!-- ② 对照实验 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_exp_proxy"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="A 跨加载器" />
+
+        <Button
+            android:id="@+id/btn_exp_token"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="B token" />
+
+        <Button
+            android:id="@+id/btn_exp_reload"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="C 重装" />
+
+        <Button
+            android:id="@+id/btn_exp_host"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="D 宿主无类" />
+
+        <Button
+            android:id="@+id/btn_exp_res"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="E 资源" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_strategy_toggle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="2"
+            android:text="切换资源策略：当前=隔离（点击换成「合并到宿主」作对照）" />
+
+        <Button
+            android:id="@+id/btn_clear_plugin"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="清除插件" />
+
+        <Button
+            android:id="@+id/btn_clear_log"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="清空日志" />
+    </LinearLayout>
+
+    <!-- ③ 插件界面挂载点：控制器形态把界面 addView 到这里 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="↓ 插件界面容器（控制器形态挂这里；Activity 形态把 decorView 并进这里）"
+        android:textSize="10sp" />
+
+    <FrameLayout
+        android:id="@+id/plugin_container"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="3"
+        android:background="#F5F5F5" />
+
+    <!-- ④ 日志：本 Lab 的产出物之一就是过程 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="↓ 装载日志 / 实验报告"
+        android:textSize="10sp" />
+
+    <ScrollView
+        android:id="@+id/sv_output"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="4">
+
+        <TextView
+            android:id="@+id/tv_output"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textIsSelectable="true"
+            android:textSize="10sp"
+            android:typeface="monospace" />
+    </ScrollView>
+</LinearLayout>

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  插件元数据 —— 「从网络接口下发插件」这条链路的契约文件。
+
+  宿主下载 plugin APK 后，先按 sha256 核对字节（防止下到半截/被替换），
+  再按 entryClass / activityClass 反射加载。真实插件化里这个文件通常由服务端
+  连同下载地址一起下发（见 app 侧 PluginManifest 的注释）。
+-->
+<plugin
+    id="com.interview.plugindemo"
+    version="1.0.0"
+    sha256="d19b34a1bcbfa2ed94483bf80da2bef31463627006c6654cfb21b4f88fd5d4a0"
+    size="17447"
+    entryClass="com.interview.plugindemo.PluginEntry"
+    activityClass="com.interview.plugindemo.ui.PluginPageActivity"
+    minSdk="24"
+    builtAt="2026-10-13T09:12:13Z" />

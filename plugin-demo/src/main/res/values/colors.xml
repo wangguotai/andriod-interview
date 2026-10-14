@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 刻意用一眼能认出的颜色，好让"这块 UI 来自插件"在截图里也站得住 -->
+    <color name="plugin_panel">#E8F5E9</color>
+    <color name="plugin_text">#33691E</color>
+    <color name="plugin_text_strong">#1B5E20</color>
+    <color name="plugin_accent">#FF6D00</color>
+</resources>

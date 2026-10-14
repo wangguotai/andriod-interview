@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 插件自己的 drawable（矢量图，无位图依赖）。
+     用于标题背景，同时验证：插件资源里不只有 layout/string，drawable 也能解析。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="8dp"
+    android:height="8dp"
+    android:viewportWidth="8"
+    android:viewportHeight="8">
+    <path
+        android:fillColor="@color/plugin_accent"
+        android:pathData="M0,0 H2 V8 H0 Z" />
+</vector>

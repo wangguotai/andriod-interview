@@ -1,0 +1,23 @@
+plugin-root-probe.txt
+────────────────────
+这个文件躺在 apk 的**包根目录**（既不在 assets/ 也不在 res/ 也不在 classes*.dex）。
+
+它验证的是 AssetManager 里一个**容易被搞错的边界** —— 注意不是"open() 也能读包根"：
+
+  · `AssetManager.open(name)` 走 `nativeOpenAsset`，**只查 assets 命名空间**。
+    所以 `open("plugin-root-probe.txt")` 对**本文件必然失败**。
+    （依据：android-34 的 android/content/res/AssetManager.java ——
+      open() → nativeOpenAsset、openNonAsset() → nativeOpenNonAsset，
+      是两个不同的 native 入口。这条曾在宿主注释里被写错，故留痕。）
+
+  · 读包根文件要换 API：`openNonAssetFd(name)`（**公开 API**）。
+    但它内部是 mmap，因此要求该 zip 条目**未被压缩**（STORED）——
+    打包脚本 package.sh 用 `zip -0` 单独写本文件，正是为了这一条。
+    若忘了，会得到：
+      FileNotFoundException: This file can not be opened as a file descriptor;
+      it is probably compressed
+
+为什么值得单拎出来：很多自研插件框架只测了 res/ 与 assets/，
+把"包根文件也能 open() 读"当成常识抄下来 —— 而它是错的。
+这个文件的作用就是让"命名空间边界"每次运行都重演一次，
+而不是停留在一条没人复核的注释里。

@@ -62,4 +62,8 @@ include(":ipc-lab")
 include(":vmp-core")
 include(":vmp-lab")
 include(":sdk-governance-runtime")
+// 插件模块：**刻意不进主 App 的依赖图**（:app 的 dependencies 里没有它）。
+// 它被 include 的唯一目的是让 AGP 负责"编译"这一步（Kotlin + R.java + resources.arsc），
+// 打包成可分发插件则由 tools/plugin-package/package.sh 手工完成 —— 见那个脚本的注释。
+include(":plugin-demo")
 includeBuild("./xshell/rn-root/node_modules/@react-native/gradle-plugin")

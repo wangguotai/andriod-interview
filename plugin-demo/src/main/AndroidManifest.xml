@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  插件自己的 manifest。
+
+  ⚠️ 这里声明的 Activity **不会被系统认识** —— 系统只看宿主安装时上报的 manifest。
+  它在这里的作用是「声明意图」：告诉读代码的人「本插件有一个 Activity 形态的入口」，
+  而宿主侧要靠一个 **占坑 stub** 才能把它拉起来 —— 本演示用的 stub 就是宿主自己的
+  `com.interview.plugin.PluginLabActivity`（它已在宿主 manifest 里注册，天然被系统认识），
+  再用反射 `Activity.attach` 把插件 Activity 的对象塞进去（见 LoadedPlugin.attachActivity）。
+
+  这也是「插件 Activity」与「类加载」的根本差别：
+    · 类：由 DexClassLoader 找到，纯 Java 语义；
+    · 组件：由系统的 PackageManager / ActivityManager 认领，必须先在宿主的
+      manifest 里有位置。ClassLoader 再强也变不出一个「系统认识的组件」。
+  本演示把这条边界摆在明面上，而不是靠 Hook AMS 把它糊过去。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <activity
+            android:name="com.interview.plugindemo.ui.PluginPageActivity"
+            android:exported="false"
+            android:label="@string/plugin_activity_label" />
+    </application>
+
+</manifest>

@@ -90,6 +90,19 @@
 <!--            </intent-filter>-->
         </activity>
 
+        <!-- ═══════════════════════════════════════════
+             插件化 Lab —— 宿主侧装载页
+             ⚠️ 这里登记的**只有宿主自己的页面**。
+                 被加载的插件（com.interview.plugindemo.*）**不在本 manifest 里**，
+                 它的字节也不在宿主 apk 里 —— 这正是本 Lab 要证的事。
+                 插件侧的入口类名来自运行时下发的 plugin-package.xml。
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.plugin.PluginLabActivity"
+            android:exported="true"
+            android:label="插件化 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
+
         <activity
             android:name="com.interview.leak.HandlerLeakActivity"
             android:exported="true"

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 这些字符串只存在于插件 APK 的 resources.arsc 里。
+         宿主对同一个 ID 取字符串会抛 Resources$NotFoundException —— 这就是"资源隔离"。 -->
+    <string name="plugin_title">插件页 · 来自 plugin-demo.apk</string>
+    <string name="plugin_subtitle">类别：独立打包的 dex + resources.arsc + assets，宿主 apk 里没有它们</string>
+    <string name="plugin_from_layout">这是插件 res/layout/plugin_page.xml 渲染出来的</string>
+    <string name="plugin_layout_line1">layout 来自插件（不是宿主）</string>
+    <string name="plugin_layout_line2">背景色 / 文字色 / 字号也都是插件 res/values 里的</string>
+    <string name="plugin_activity_label">插件 Activity（由宿主占坑反射拉起）</string>
+
+    <!-- root 级文件：不进 resources.arsc，验证的是 AssetManager 的 addAssetPath
+         能把「包根目录」也一起挂上（很多插件框架漏掉这一层）。 -->
+    <string name="plugin_root_probe_name">plugin-root-probe.txt</string>
+</resources>

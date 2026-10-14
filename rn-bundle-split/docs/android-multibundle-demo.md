@@ -54,9 +54,15 @@ delegate.loadScriptFromAssets(context.assets, "assets://business.android.bundle"
 
 - **原生侧**：`Instance::loadScriptFromString` 只是往 JS 线程队列投递一次
   `evaluateJavaScript`，**没有任何状态重置**。第二次求值就是往已有运行时里再灌一段脚本。
-- **JS 侧**：业务包尾部自带一个 prelude shim，它发现 `g.__r` / `g.__d` 已存在就直接早返回，
-  于是 **不会调用 `__c()` 清表**。业务包的 `__d(...)` 追加进 base 建好的同一张全局模块表
-  （`require.js` 的 `define` 用 `modules.has(id)` 去重，先到先得）。
+- **JS 侧**：业务包是 `modulesOnly` 产物，**通篇不含任何 prelude** ——
+  实测业务包里连 `__c(` 都搜不到。清表只发生在 prelude 执行时（`clear()` → `modules = new Map()`），
+  所以业务包**根本没有机会清空 base 的模块表**。业务包的 `__d(...)` 于是追加进 base 建好的
+  同一张全局模块表（`define` 第一行就是 `if (modules.has(n)) return;`，id 重复则**先到先得**，
+  base 注册的不会被业务包覆盖）。
+
+  > 补充：业务包尾部确实还有一段 runtime 垫片（`split` 命令追加的），它发现 `g.__r` / `g.__d`
+  > 已存在就早返回。但那是**兜底**，不是本机制成立的原因 —— 真正起作用的是「不含 prelude」。
+  > 详细分析见 [implementation.md 第 7.2 节](./implementation.md#72-业务包独立加载其实不行已验证)。
 
 这也是业务包里那些 `__d` 只定义「业务自己的 4 个模块」、却把 `react` / `react-native`
 的 id 留在 `dependencyMap` 里的原因 —— 引用要保留，注册由 base 提供。

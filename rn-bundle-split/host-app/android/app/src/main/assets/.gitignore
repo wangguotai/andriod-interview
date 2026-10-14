@@ -1,0 +1,4 @@
+# 这两个 bundle 是 scripts/prepare-android-demo.sh 生成并复制过来的产物，
+# 不纳入版本控制（base ~868KB / business ~5KB，且每次构建都可能变化）。
+# 跑一次 bash scripts/prepare-android-demo.sh 即可重新生成。
+*.bundle

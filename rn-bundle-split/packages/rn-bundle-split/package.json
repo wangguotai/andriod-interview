@@ -1,0 +1,18 @@
+{
+  "name": "rn-bundle-split",
+  "version": "0.1.0",
+  "private": true,
+  "description": "React Native bundle 拆分工具：产出 base bundle + mapping，并让任意其他 RN 工程凭 mapping 裁掉 base 内容，只保留业务代码",
+  "main": "index.js",
+  "bin": {
+    "rn-bundle-split": "bin/rn-bundle-split.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "metro": ">=0.80.0",
+    "react-native": ">=0.75.0"
+  }
+}

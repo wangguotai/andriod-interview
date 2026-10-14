@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">RnBundleSplit</string>
+    <string name="business_app_name">BusinessApp (业务包)</string>
+</resources>

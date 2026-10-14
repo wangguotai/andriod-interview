@@ -1,0 +1,12 @@
+# 忽略构建产物与依赖
+node_modules/
+output/
+build/
+.gradle/
+.cxx/
+*.log
+
+# 工具自身产生的临时文件（preset 是 init 自动生成的，不纳入版本控制）
+rn-bundle-split.preset.js
+rn-bundle-split.config.json
+metro.config.js.rnbs-backup

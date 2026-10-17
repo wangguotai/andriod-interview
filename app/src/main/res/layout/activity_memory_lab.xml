@@ -124,6 +124,78 @@
             android:text="直方图历史" />
     </LinearLayout>
 
+    <!-- ═══════ 第一组之二：OOM 现场取证（fork 快照）═══════
+         与上面「抓直方图」刻意分成两块：那个是**本进程** dump（会 stop-the-world
+         0.5~2s，水位正常时用），这个是 **fork 子进程** dump（父进程只被挂起毫秒级，
+         专为 OOM 现场设计）。两者的代价与适用场景完全不同，别合并成一个按钮。 -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="── OOM 现场取证（fork 子进程 dump 冻结堆）──"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_oom_desc"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="OOM能力/符号" />
+
+        <Button
+            android:id="@+id/btn_oom_snapshot"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="快照(fork)" />
+
+        <Button
+            android:id="@+id/btn_oom_real"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="⚠真OOM+快照" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_oom_list"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="快照文件列表" />
+
+        <Button
+            android:id="@+id/btn_oom_analyze"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="解析最近快照" />
+
+        <Button
+            android:id="@+id/btn_oom_cleanup"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textSize="11sp"
+            android:text="清理快照" />
+    </LinearLayout>
+
     <!-- ═══════ 第二组：Native ═══════ -->
     <TextView
         android:layout_width="match_parent"

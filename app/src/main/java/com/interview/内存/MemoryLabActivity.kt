@@ -493,6 +493,220 @@ class MemoryLabActivity : AppCompatActivity() {
                 }
             )
         }
+
+        // ═══════ 第一组之二：OOM 现场取证（fork 快照）═══════
+        // 这一组按钮的共同点：**每个都在演示/验证本方案的一条边界**，
+        // 而不是"点一下看能不能跑"。尤其「对照实验flags」——它能复现三种卡死。
+
+        bind(R.id.btn_oom_desc) {
+            emit(OomSnapshotMonitor.describe(this))
+        }
+
+        bind(R.id.btn_oom_snapshot) {
+            emit(
+                oomProbeHeader() +
+                        "【手动快照】用**当前水位**拍一张（不等 OOM）。\n" +
+                        "预期：父进程只被挂起**毫秒级**（就是 fork 那个窗口），几秒后出文件。\n" +
+                        "若堆很大（几百 MB），文件也会有几百 MB —— 这是本方案的真实成本，不是 bug。"
+            )
+            // ratio 传 1.0：按钮本身是显式动作，绕过"水位阈值"这一层判定
+            val accepted = OomSnapshotMonitor.snapshotOnWatermark(this, OomSnapshotMonitor.MANUAL_SCENE, 1.0)
+            if (!accepted) {
+                emit(
+                    "未受理。可能原因（逐个对照）：\n" +
+                            "  · 最小间隔未到（当前 ${OomSnapshotMonitor.minIntervalMs / 1000}s）\n" +
+                            "  · 已有一次快照进行中\n" +
+                            "  · native 不可用（符号未命中 / 非 arm64）\n" +
+                            "  · 后台泳道饱和\n" +
+                            "  · enabled=false\n" +
+                            "点「OOM能力/符号」能看到当前每一项的实际状态。"
+                )
+            }
+        }
+
+        bind(R.id.btn_oom_real) {
+            emit(
+                "【真 OOM + fork 快照】\n" +
+                        "即将**真的**把 Java 堆分配满，直到 ART 抛 OutOfMemoryError，\n" +
+                        "在 catch 里立刻 fork 子进程拍快照。\n\n" +
+                        "预期：\n" +
+                        "  · 水位冲到 max（本机 256MB）→ 抛 OutOfMemoryError\n" +
+                        "  · fork 快照产出几百 MB 文件（实测 285MB / 1160ms）\n" +
+                        "  · 本按钮下方能看到「OOM 已触发」+ 快照结果\n\n" +
+                        "⚠️ 为什么必须真 OOM，而不是\"加压到 85% 再拍\"：\n" +
+                        "   真 OOM 那一刻是本方案唯一真正要面对的场景 —— 堆已经满了，\n" +
+                        "   而 fork 还要复制页表、子进程还要写缓冲。只测 85% 等于把最难的场景跳过。\n" +
+                        "⚠️ 期间 App 会真的内存紧张，别的操作可能失败 —— 别掩盖这个代价。"
+            )
+            triggerRealOom()
+        }
+
+        bind(R.id.btn_oom_list) {
+            // ⚠️ 先把 activity 语境取出来：buildString 的 lambda 里 `this` 是 StringBuilder，
+            //    直接写 this 会把 StringBuilder 当 Context 传出去（编译期报 Type mismatch）。
+            val ctx = this
+            val files = OomSnapshotMonitor.listSnapshots(ctx)
+            emit(
+                buildString {
+                    appendLine("【OOM 快照文件】共 ${files.size} 份 / ${MemoryMetrics.fmt(OomSnapshotMonitor.totalDiskUsage(ctx))}")
+                    if (files.isEmpty()) {
+                        appendLine("（无）—— 先点「快照(fork)」或「⚠真OOM+快照」")
+                    } else {
+                        files.forEach { f ->
+                            appendLine("  ${f.name}")
+                            appendLine("     ${MemoryMetrics.fmt(f.length())}   ${java.util.Date(f.lastModified())}")
+                        }
+                    }
+                    appendLine()
+                    appendLine("⚠️ 单份可达数百 MB（OOM 时堆是满的）—— 这就是保留上限只有 2 份的原因。")
+                    appendLine("   生产上应当是「上报成功后立即删」；这里留 2 份是为了能对比两次 OOM。")
+                }
+            )
+        }
+
+        bind(R.id.btn_oom_analyze) {
+            // ⚠️ 这个按钮的存在本身就是一条设计结论：**端内解析被有意推迟了**。
+            //    在 OOM 时刻解析实测会自己 OutOfMemoryError（见 doSnapshot 的注释），
+            //    所以解析必须等到"内存已经恢复"的时刻，也就是用户点它的现在。
+            // ⚠️ 不能只看 lastSnapshot：它是**进程内**的字段，重启后就没了。
+            //    而快照文件是落盘的 —— "进程重启后想分析上次崩溃的现场"恰恰是最常见的用法。
+            //    所以这里以**磁盘上的最新文件**为准（lastSnapshot 只是优先提示用）。
+            val f = OomSnapshotMonitor.lastSnapshot?.file?.takeIf { it.exists() }
+                ?: OomSnapshotMonitor.listSnapshots(this).firstOrNull()
+            if (f == null) {
+                emit("还没有快照可解析 —— 先点「快照(fork)」或「真OOM+快照」。")
+                return@bind
+            }
+            val fromDisk = OomSnapshotMonitor.lastSnapshot?.file?.absolutePath != f.absolutePath
+            if (fromDisk) {
+                emit("（进程内没有上次记录，改用磁盘上最新的一份：${f.name}）")
+            }
+            emit("开始解析 ${f.name}（${MemoryMetrics.fmt(f.length())}）…\n" +
+                    "⚠️ 这是**流式**解析，内存占用不随文件大小线性增长，但 285MB 大概要几十秒；\n" +
+                    "   期间页面会被这段输出挡住（后台线程在做，UI 没卡）。")
+            ThreadPools.background.execute("oom.analyze") {
+                val t0 = android.os.SystemClock.uptimeMillis()
+                val h = OomSnapshotMonitor.analyze(f)
+                val cost = android.os.SystemClock.uptimeMillis() - t0
+                emit(
+                    if (h == null) {
+                        "解析失败（文件仍在，可用 shark/MAT 离线打开）：${f.absolutePath}"
+                    } else {
+                        buildString {
+                            appendLine("═══ 事后解析结果（${cost}ms）═══")
+                            appendLine("类 ${h.classCount} 个 / 合计 ${MemoryMetrics.fmt(h.totalBytes)} / 实例 ${h.totalInstances} 个")
+                            appendLine("idSize=${h.idSize} 文件=${MemoryMetrics.fmt(h.fileBytes)} 类名映射=${if (h.nameMappingReady) "完整" else "缺失"}")
+                            if (h.skippedSegments > 0 || h.unresolvedInstances > 0) {
+                                appendLine("⚠️ 跳过 segment ${h.skippedSegments} 个 / 未解析实例 ${h.unresolvedInstances} 个 —— 数字**偏低**，如实暴露")
+                            }
+                            appendLine()
+                            appendLine("按字节 Top10：")
+                            h.top(10).forEach { appendLine("  ${it.describe()}") }
+                            appendLine()
+                            appendLine("⚠️ 只有「类 → 数量/字节」，没有引用链（谁持有它）。")
+                            appendLine("   要看「谁**涨了**」需要两份快照差分，或者用 shark 打开这个文件看支配树。")
+                        }
+                    }
+                )
+            }
+        }
+
+        bind(R.id.btn_oom_cleanup) {
+            val dir = OomSnapshotMonitor.snapshotDir(this)
+            val before = OomSnapshotMonitor.totalDiskUsage(this)
+            val removed = OomSnapshotMonitor.cleanupOldDumps(dir, keep = 0)
+            val after = OomSnapshotMonitor.totalDiskUsage(this)
+            emit("清理完成：删除 $removed 份，释放 ${MemoryMetrics.fmt(before - after)}（剩余 ${MemoryMetrics.fmt(after)}）")
+        }
+    }
+
+    /**
+     * 真 OOM 触发：把堆分配满，在 catch 里立刻取证。
+     *
+     * ⚠️ 必须跑在**后台线程**：这一操作会吃掉几百 MB，在主线程做会把 UI 一起拖死。
+     *   但 fork 之后父进程会继续活着（这是本方案的前提），所以这里的"占用内存"
+     *   在同一时刻也证明了**父进程没有被 dump 流程影响**。
+     */
+    private fun triggerRealOom() {
+        ThreadPools.background.execute("oom.real.trigger") {
+            val holder = ArrayList<ByteArray>()
+            var oom: OutOfMemoryError? = null
+            val t0 = SystemClock.uptimeMillis()
+            try {
+                // 一次 1MB：让"最后一次分配失败"的现场就在眼前，也便于观察已持有量
+                while (true) {
+                    holder.add(ByteArray(1024 * 1024))
+                }
+            } catch (e: OutOfMemoryError) {
+                oom = e
+            }
+            val cost = SystemClock.uptimeMillis() - t0
+            val used = Runtime.getRuntime().let { it.totalMemory() - it.freeMemory() }
+            val max = Runtime.getRuntime().maxMemory()
+
+            emit(
+                "【真 OOM 已触发】耗时 ${cost}ms\n" +
+                        "  异常：${oom?.message}\n" +
+                        "  水位：${MemoryMetrics.fmt(used)} / ${MemoryMetrics.fmt(max)}\n" +
+                        "  已持有：${holder.size} 个 1MB byte[]\n" +
+                        "  现在调用 OomSnapshotMonitor.onOutOfMemoryError() —— 它会 fork 子进程取证。"
+            )
+
+            // 这就是"线上该怎么接"的写法：在**每个** catch(OutOfMemoryError) 里都调一次
+            val held = holder.size
+            val before = OomSnapshotMonitor.lastSnapshot
+            val accepted = OomSnapshotMonitor.onOutOfMemoryError(this, oom, REAL_OOM_SCENE)
+            emit("onOutOfMemoryError 受理=$accepted（false 表示被闸门挡住或 native 不可用）\n" +
+                    "⚠️ 父进程此刻仍然活着、仍持有 ${held}MB —— 这正是 fork 方案与\n" +
+                    "   「在本进程里 dump」的区别：取证不需要父进程先腾出内存。")
+
+            // ⚠️ 这里**不能** sleep 固定秒数再读 lastSnapshot，两个坑：
+            //    ① 真 OOM 时堆是满的（实测 285MB 文件），dump+解析远超 3s，会读到"还没好"；
+            //    ② 更隐蔽的：lastSnapshot 是**全局**的，睡眠期间可能读到的是**上一张**快照，
+            //       于是页面把旧记录当成这次的现场展示 —— 一个不会报错、但结论完全错的 bug。
+            //    所以改成"轮询直到对象身份变化"，即**确认拿到的是这一次的结果**。
+            val rec = waitForNewRecord(before, timeoutMs = 90_000)
+            emit(
+                if (rec == null) {
+                    "（90s 内没等到新记录 —— 可能仍在写盘，或父进程已被系统回收。\n" +
+                            " 点「快照文件列表」看文件是否已出现；文件在，就说明快照其实成功了。）"
+                } else {
+                    rec.describe() + "\n\n（父进程仍持有 ${held}MB，未被 dump 影响）"
+                }
+            )
+            holder.clear()
+            emit("已释放 ${held}MB 负载 —— 注意：**快照文件与这份释放无关**，\n" +
+                    "它是 fork 那一刻的冻结副本（子进程早已独立）。")
+        }
+    }
+
+    /**
+     * 等一次**新的**快照记录出现（按对象身份判定，不按时间戳）。
+     *
+     * 为什么必须按身份：`lastSnapshot` 是全局单例字段。若只用 sleep + 读字段，
+     * 很容易把**上一次**的结果当成这一次的现场展示出来 —— 不报错，但结论是错的。
+     * 这是"取证工具本身给出错误证据"的最坏形态，所以宁可写几行轮询。
+     */
+    private fun waitForNewRecord(prev: OomSnapshotMonitor.SnapshotRecord?, timeoutMs: Long): OomSnapshotMonitor.SnapshotRecord? {
+        val deadline = SystemClock.uptimeMillis() + timeoutMs
+        while (SystemClock.uptimeMillis() < deadline) {
+            val now = OomSnapshotMonitor.lastSnapshot
+            if (now != null && now !== prev) return now
+            Thread.sleep(200)
+        }
+        return null
+    }
+
+    /** OOM 组的输出前缀：把"当前能不能用"摆在每条输出最前面，避免"点了没反应"要靠猜。 */
+    private fun oomProbeHeader(): String = buildString {
+        appendLine("── OOM 快照能力 ──")
+        val probe = com.interview.oomdump.OomSnapshotNative.probe()
+        when {
+            probe == null -> appendLine("  ⚠️ native 不可用：${com.interview.oomdump.OomSnapshotNative.loadError}")
+            probe.usable -> appendLine("  ✅ 可用（hprof 入口符号已命中）")
+            else -> appendLine("  ❌ 符号未命中 —— 点「OOM能力/符号」看缺了哪个")
+        }
+        appendLine()
     }
 
     /**
@@ -571,5 +785,7 @@ class MemoryLabActivity : AppCompatActivity() {
 
     private companion object {
         const val TAG = "MemoryMonitor"
+
+        const val REAL_OOM_SCENE = "真OOM按钮"
     }
 }

@@ -47,6 +47,27 @@ add_library(memtrace SHARED memtrace.cpp)
 target_link_libraries(memtrace ${log-lib} dl bytehook::bytehook)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# oomsnapshot：JVM OOM 现场取证 —— fork 出子进程，由子进程 dump 父进程的堆快照
+#
+# 单独成一个 .so 的理由和其它第三方库注册处同一个逻辑 —— **失败后果不同**：
+#   · threadhook   装错会改变线程创建行为；
+#   · anrsignal    装错会拖慢系统 dump trace；
+#   · memtrace     装错会挂在全局内存分配热路径上；
+#   · oomsnapshot  装错会（a）在子进程里改到 ART 的代码段、
+#                        （b）把父进程其它线程挂在 SuspendAll 上不回来
+#                   —— 后者会让**整个 App 冻结**：
+#                   它动的是 ART 的运行时同步原语，而不是只读数据。
+#
+# 因此它必须能独立 loadLibrary 失败、独立降级，且安装/触发都要能在 logcat 单独观察。
+#
+# ⚠️ 它**不需要**额外依赖：符号表是自己走 ELF 结构查的（dl_iterate_phdr + DT_SYMTAB），
+#    库本身只用 liblog + libc + libdl。这也正是它能工作的前提 ——
+#    应用 namespace 里 dlopen 不到 libart.so（见 oom_snapshot.cpp 文件头【0】）。
+# ─────────────────────────────────────────────────────────────────────────────
+add_library(oomsnapshot SHARED oom_snapshot.cpp)
+target_link_libraries(oomsnapshot ${log-lib} dl)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Rust 库注册
 #
 #   1) imagepipeline：图像流水线（纯算法 kernel + JNI 绑定层）

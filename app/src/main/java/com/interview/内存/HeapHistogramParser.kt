@@ -109,6 +109,19 @@ object MemoryHeapAnalyzer {
     /** 解析上限：超过直接拒绝（避免把"一个内存问题"变成"两个"） */
     const val MAX_DUMP_BYTES = 64L * 1024 * 1024
 
+    /**
+     * OOM 现场快照用的**更大**上限（见 [OomSnapshotMonitor]）。
+     *
+     * 为什么需要一个单独的上限：OOM 快照天生就大 —— 堆是满的，实测 285MB，
+     * 固定用 64MB 上限的话，"最该分析的那份文件"永远解析不了，功能等于只做了一半。
+     *
+     * 为什么放大到 512MB 是安全的：本解析器是**流式**的（BufferedInputStream +
+     * 逐记录读），内存占用是"类/字符串映射表"的量级，**不随文件大小线性增长**；
+     * 代价只是 CPU 时间（285MB 大概几十秒）。且它只在后台线程调用，
+     * 不会卡 UI。这里仍然给个上界，因为"无限解析"在低端设备上会变成新的问题。
+     */
+    const val MAX_ANALYZE_BYTES_FOR_OOM = 512L * 1024 * 1024
+
     /** 单条记录的载荷上限：超过就跳过（异常大的记录里没有我们要的聚合信息） */
     private const val MAX_RECORD_BYTES = 64 * 1024 * 1024
 
@@ -175,11 +188,20 @@ object MemoryHeapAnalyzer {
      * 单条记录的载荷**按长度跳过而不缓存**（0x21/0x22/0x23 的大载荷尤其不能整块读进来
      * —— 45 MB 的 dump 里有 35k 个对象数组，整块读会真的吃掉几十 MB）。
      */
-    fun parse(file: File): Histogram {
+    fun parse(file: File): Histogram = parse(file, MAX_DUMP_BYTES)
+
+    /**
+     * 带自定义上限的解析入口。
+     *
+     * ⚠️ 默认入口 [parse] 的行为**不变**（仍是 64MB）—— 这是刻意的：
+     *    共享入口放宽上限会悄悄改变既有调用方的代价模型。
+     *    只有明确知道"文件天生就大"的场景（OOM 快照）才传入更大的值。
+     */
+    fun parse(file: File, maxBytes: Long): Histogram {
         val t0 = System.currentTimeMillis()
         require(file.exists()) { "hprof 不存在：${file.absolutePath}" }
-        require(file.length() <= MAX_DUMP_BYTES) {
-            "hprof 过大（${MemoryMetrics.fmt(file.length())} > 上限 ${MemoryMetrics.fmt(MAX_DUMP_BYTES)}）" +
+        require(file.length() <= maxBytes) {
+            "hprof 过大（${MemoryMetrics.fmt(file.length())} > 上限 ${MemoryMetrics.fmt(maxBytes)}）" +
                     "：拒绝解析，避免把内存问题变成两个"
         }
 

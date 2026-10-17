@@ -74,6 +74,13 @@
 #   · com.interview.memtrace.MemTraceNative         → libmemtrace.so  (bytehook)
 #   · com.interview.vmp.nativebridge.VmpNative      → libvmp_android.so (Rust, 来自 :vmp-core)
 #   · com.interview.thread.NativeThreadHook         → libthreadhook.so
+#   · com.interview.oomdump.OomSnapshotNative        → liboomsnapshot.so
+#
+# ⚠️ oomsnapshot 的 JNI 声明类**必须在 ASCII 包** `com.interview.oomdump` 里：
+#    ART 查符号时会把类名里的每个非 ASCII 字节转义成 `_0XX`，而 clang 导出的是
+#    原始 UTF-8 字节 —— 两者永远对不上，编译期无感、运行期 UnsatisfiedLinkError。
+#    （与 `com.interview.memtrace` / `com.interview.anrsignal` 同一条约束，
+#      实证见 `AnrSigquitHook.kt:12-26`。）
 #
 # ⚠️ -keepclasseswithmembernames 只对**存活类**生效：R8 若先把整个类判定为
 #    不可达并删掉，规则也救不回来。所以下面逐个显式 -keep 这些桥接类 ——
@@ -88,6 +95,7 @@
 -keep class com.interview.image.nativebridge.** { *; }
 -keep class com.interview.memtrace.** { *; }
 -keep class com.interview.vmp.nativebridge.** { *; }
+-keep class com.interview.oomdump.** { *; }
 # thread 包整体保住：既含 NativeThreadHook（JNI），又含 ASM 改写的落点（见第 4 节）
 -keep class com.interview.thread.** { *; }
 

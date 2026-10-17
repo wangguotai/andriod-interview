@@ -103,3 +103,51 @@
   本文补的是「**哪个 SDK 干的**」这个归因能力（Hook 点在 libc，加壳 SDK 也能抓到）
 - 体积的**工程开关**在 [`docs/package-size-optimization.md`](docs/package-size-optimization.md)，
   本文补的是「**优化谁**」的归属定位
+
+---
+
+## 2026-10-17 JVM OOM 现场取证（fork 子进程 dump 冻结堆）
+
+需求：OOM 那一刻不要在本进程里 dump —— 「fork 一个子进程，子进程仅复制页表，
+由它来 dump 这份快照，就是 JVM 发生 OOM 时的**原样**」。
+
+产出：
+
+- [`docs/jvm-oom-fork-forensics.md`](docs/jvm-oom-fork-forensics.md) —— 设计说明 + 实测记录 + **面试答题稿**
+- [`docs/jvm-oom-fork-forensics-research.md`](docs/jvm-oom-fork-forensics-research.md) —— 技术考证
+  （KOOM 源码 / AOSP ART·bionic·crashpad 逐版本比对 / Perfetto 同款实现）
+- [`app/src/main/cpp/oom_snapshot.cpp`](app/src/main/cpp/oom_snapshot.cpp) —— 手工 ELF 符号解析 + 挂起 + fork + 子进程 patch
+- [`app/src/main/java/com/interview/内存/OomSnapshotMonitor.kt`](app/src/main/java/com/interview/内存/OomSnapshotMonitor.kt) —— 业务层
+- 演示入口：`MemoryLabActivity` 的「OOM 现场取证」按钮组
+
+```bash
+./gradlew :app:assembleDebug
+# 装机后：MemoryLab → 「OOM能力/符号」看符号命中 →「⚠真OOM+快照」跑真现场
+```
+
+实测摘要（Redmi K40 / Android 12 / arm64 / user 版 / 无 root）：
+
+| 场景 | 堆水位 | 快照大小 | 耗时 | **父进程被挂起** |
+|---|---|---|---|---|
+| 手动 | 6.45/256 MB | 37.97 MB | 1114 ms | **0 ms** |
+| **真 OOM** | **255.9/256 MB** | **285.00 MB** | 1550 ms | **0～4 ms** |
+
+结构完整性用 **shark**（第三方解析器）验证：285MB / **788,588 条记录逐条读到 EOF 无错**。
+冻结语义单独验证：fork 后被覆写的 `byte[]` 在 hprof 里仍是 fork 那一刻的内容。
+
+五个值得一提的坑（**全是静默错误**，编译期发现不了，已修复并留档）：
+
+1. **GNU_HASH 漏了 bloom filter** → 符号总数算成 40 亿。
+   符号都在时一切正常，但**一旦某个名字没找到，扫描就冲过 `.dynsym` 末尾，
+   在 `strcmp` 上崩掉整个父进程**。修法是**用段大小算索引上界**，而不是"找不到就 break"。
+2. **预防性快照把真 OOM 现场挤掉**（实测：手动拍完 14s 后真 OOM，被"最小间隔"挡了）。
+   真 OOM 必须**无视最小间隔**；但并发互斥对两者都生效。
+3. **取证任务在共享泳道里被饿死**：`受理=true` 却一行日志都没打 —— 像失败又像没执行。
+   OOM 取证必须起**专用线程**。
+4. **在 OOM 现场解析 hprof** → **解析器自己 OOM**（堆还满着）。
+   观测行为不该加重被观测的问题 ⇒ 改成"只落盘"，解析挪到内存恢复后。
+5. `/apex/.../libart.so` 的 `DumpHeap` 是 hidden 符号，`dlopen` / 未定义符号两条路都被封死 ⇒ 手工解析 ELF。
+
+**诚实边界**：只覆盖 Java 堆 OOM；只在 Android 12/arm64 实测；
+单份快照 285MB（保留 2 份 ≈ 570MB）；真 OOM 时 fork 可能 ENOMEM（故设水位预触发通道）；
+端内只有直方图、没有引用链。

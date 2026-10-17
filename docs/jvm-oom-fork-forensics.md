@@ -265,7 +265,68 @@ try { ... } catch (e: OutOfMemoryError) {
 | **真 OOM 时 fork 可能 ENOMEM** | 页表 + 子进程写缓冲都要内存；这正是**水位预触发通道**存在的原因 —— 给"真拍不出来的那一次"留个参照 |
 | **磁盘成本高** | 实测单份 **285MB**，保留 2 份 ≈ **570MB**；生产上应"上报成功后立即删"，本仓库留 2 份是为了能对比两次 OOM |
 | **没有引用链** | 端内只有"类 → 数量/字节"（直方图）。要看"谁持有它"必须用 shark/MAT 打开支配树 |
+| **没有分配栈信息**（= 打开后没有 trace） | 实测：本仓库产出的 hprof 里 `STACK_FRAME = 0`，42 万个对象的 `stack_trace_serial` **全是 0**。原因见下节 —— 这是 **ART 的默认行为**，不是本功能的缺陷 |
 | **固定符号名逐个 `strcmp`** | 换 ROM 后若符号名变了，走"符号未命中"干净失败，不会 hang |
+
+### 5.1 为什么 hprof 打开后"只有内存信息、没有 trace"
+
+用 Android Studio 打开会看到只有类/实例/字节数、没有分配调用栈。**这不是本方案的问题**，
+是 ART 这几年的既定行为 —— 三条证据：
+
+1. **官方 `Debug.dumpHprofData()` 的结果一模一样**（本机 A/B 实测）：
+
+   | 产出方式 | STACK_FRAME | 有分配栈的对象 |
+   |---|---|---|
+   | 本方案（fork 子进程 + `art::hprof::DumpHeap`） | **0** | 0 / 428,389 |
+   | `Debug.dumpHprofData()`（官方，同机同版本） | **0** | 0 / 425,247 |
+
+   也就是说：换成官方 API，打开后**同样没有 trace**。如果这是本功能的缺陷，官方也一起"坏"了。
+
+2. **根因在 AOSP 源码**（`art/runtime/hprof/hprof.cc`，android12-release，第 444-452 行）：
+
+   ```cpp
+   void Dump()
+     REQUIRES(Locks::mutator_lock_) ... {
+     {
+       MutexLock mu(Thread::Current(), *Locks::alloc_tracker_lock_);
+       if (Runtime::Current()->GetHeap()->IsAllocTrackingEnabled()) {   // ← 闸门在这里
+         PopulateAllocationTrackingTraces();
+       }
+     }
+     ...
+   ```
+
+   分配栈只有在**分配跟踪（allocation tracking）已被开启**时才会被写进文件。
+   否则 `LookupStackTraceSerialNumber()` 一律返回 `kHprofNullStackTrace = 0`
+   （同一文件第 156、627-633 行），落盘就是"每个对象都没有栈"。
+
+3. **这个开关不受 dump 的参数控制**：`DumpHeap(filename, fd, direct_to_ddms)` 的
+   `direct_to_ddms` **只决定输出走 DDMS socket 还是走文件 fd**（`DumpToDdmsDirect`），
+   与"要不要记录分配栈"无关。所以**无论怎么调用 `DumpHeap` 都拿不到 trace**。
+
+**为什么这个选择是对的（不只是"能用就行"）**：分配跟踪一开，
+ART 会给**每一次分配**记录调用栈（`AllocRecordObjectMap`，默认上限
+`kDefaultNumAllocRecords = 512*1024` 条记录、`kMaxSupportedStackDepth = 128` 帧，
+见 `allocation_record.h`），并给所有快速分配入口点插桩（`InstrumentQuickAllocEntryPoints`）。
+这对一个 App 是**长期的性能与内存惩罚**，代价远大于一次事后分析的便利。
+所以 AOSP 默认关闭；而 Google 官方做 OOM 时刻快照那套（Perfetto `android.java_hprof`）
+也**只 dump 堆内容、不 dump 分配栈** —— 我们的取舍与它一致。
+
+**那"这个对象是谁分配的"到底怎么查**（按可靠性排序）：
+
+| 手段 | 前提 | 说明 |
+|---|---|---|
+| 端内**两次直方图差分** | 无 | 本仓库已有（「压力前后差分」按钮）。定位"哪类对象在涨"，**不需要 trace** |
+| shark / MAT 看**支配树 + 引用链** | 无 | 定位"谁持有它"。这是分析泄漏的主路径，也不需要 trace |
+| 借助带分配跟踪的工具抓 dump | **得先开分配跟踪** | 只有先开启分配跟踪、再 dump，文件里才会带栈。AS Memory Profiler 抓的 dump 通常带（它自己会去开）；但受 512K 条记录上限约束，超出就丢最老的，所以**它也未必查得到** |
+| 想在 App 内自带 | 需 `VMDebug.setAllocTrackerStackDepth()` 等内部 API | 可行但**代价写清楚**：长期插桩 + 每对象记录栈。不建议为"偶尔的 OOM 取证"常开 |
+
+> ⚠️ 上面第三行里"AS 会自己去开分配跟踪"是**通常做法**，我**未在本次实测中直接验证**
+>    （本次只硬验证了"官方 `dumpHprofData` 与我们的文件都没有栈"这一条）。
+>    要确认请自行在 AS 里对同一进程抓一次，再做同样的 `STACK_FRAME` 计数。
+
+**一句话**：fork 快照解决的是"**OOM 那一刻堆里有什么、各占多少**"（保真度与低停顿）；
+"**谁分配的**"是另一个问题，靠差分与支配树解决，两者不冲突、也不该混为一谈。
 
 ---
 

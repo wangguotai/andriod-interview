@@ -151,3 +151,11 @@
 **诚实边界**：只覆盖 Java 堆 OOM；只在 Android 12/arm64 实测；
 单份快照 285MB（保留 2 份 ≈ 570MB）；真 OOM 时 fork 可能 ENOMEM（故设水位预触发通道）；
 端内只有直方图、没有引用链。
+
+> ⚠️ **打开 hprof 看不到 trace（分配调用栈）是 ART 的默认行为，不是本功能的缺陷**：
+> ART 只在**分配跟踪已开启**时才写分配栈（`hprof.cc:449` 的 `IsAllocTrackingEnabled()`
+> 闸门），而 `DumpHeap` 的 `direct_to_ddms` 参数只管输出通道、与此无关。
+> 本机 A/B 实测：官方 `Debug.dumpHprofData()` 产出的文件**同样** `STACK_FRAME = 0`、
+> 42 万个对象的 `stack_trace_serial` 全为 0。定位"谁分配的"应靠
+> **两次直方图差分 + shark/MAT 支配树**，不需要 trace。
+> 详见 [`docs/jvm-oom-fork-forensics.md`](docs/jvm-oom-fork-forensics.md) §5.1。

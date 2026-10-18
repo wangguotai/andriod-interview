@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  楼层标题元件。
+
+  ★ 这个元件是**展平架构的关键角色**：展平楼层没有容器 View，
+  所以 `component.title` 根本没有地方渲染（见 PagePlanBuilder.horizontal 的说明）。
+  楼层标题必须由**这个元件**承担，它的 `needsFullRow = true`
+  让它在宫格里独占一整行。
+
+  它也解释了 PagePlanBuilder.flatten 里那段"断行补齐"逻辑为什么必需：
+  标题占满一行，若前一行还有剩余 span，GridLayoutManager 会把剩余部分空着，
+  而空多少取决于前面有几个元素 —— 那是不确定的，必须显式补齐。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingHorizontal="8dp"
+    android:paddingTop="12dp"
+    android:paddingBottom="6dp">
+
+    <View
+        android:layout_width="3dp"
+        android:layout_height="14dp"
+        android:background="#E02020" />
+
+    <TextView
+        android:id="@+id/ec_header_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="6dp"
+        android:textColor="#1A1A1A"
+        android:textSize="16sp"
+        android:textStyle="bold"
+        tools:text="为你推荐" />
+
+    <TextView
+        android:id="@+id/ec_header_subtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textColor="#9A9A9A"
+        android:textSize="12sp"
+        tools:text="根据浏览记录生成" />
+
+</LinearLayout>

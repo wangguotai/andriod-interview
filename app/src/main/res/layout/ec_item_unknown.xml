@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  未知元件的降级占位。
+
+  ★ 这是本 demo 里**最该被记住的一个布局**：它存在的全部意义是
+  "服务端下发了新玩法，老客户端不认识，但**不能装作它不存在**"。
+
+  若把未知元件丢掉，后果是：运营配了 5 个商品，用户只看到 4 个 ——
+  少了但看不出少，线上几乎无法发现。所以这里：
+    · 保留占位（页面高度不变，位置感不丢）；
+    · **把原始类型名打在屏幕上**（"live_room_card"），
+      让看到的人一眼分清是"客户端该升级"而不是"服务端没下发"。
+
+  视觉上刻意做得像"占位"（虚线感 + 灰底），而不是像正常的业务卡片。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    android:background="@drawable/ec_bg_unknown"
+    android:gravity="center"
+    android:minHeight="72dp"
+    android:orientation="vertical"
+    android:padding="8dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="未支持的元件"
+        android:textColor="#B26A00"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/ec_unknown_type"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:fontFamily="monospace"
+        android:gravity="center"
+        android:maxLines="2"
+        android:textColor="#8A5A00"
+        android:textSize="11sp"
+        tools:text="live_room_card" />
+
+    <TextView
+        android:id="@+id/ec_unknown_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textColor="#8A5A00"
+        android:textSize="11sp"
+        tools:text="直播间卡片"
+        tools:visibility="visible" />
+
+</LinearLayout>

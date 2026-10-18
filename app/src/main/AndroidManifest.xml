@@ -103,6 +103,16 @@
             android:label="插件化 Lab"
             android:theme="@style/Theme.MyApplication.AppCompat" />
 
+        <!-- ═══════════════════════════════════════════
+             组件化首页 Lab —— 数据驱动的组件/元件渲染
+             数据来自 assets/ec-home/page.json（改数据不用改代码）。
+             ═══════════════════════════════════════════ -->
+        <activity
+            android:name="com.interview.ec.EcHomeActivity"
+            android:exported="true"
+            android:label="组件化首页 Lab"
+            android:theme="@style/Theme.MyApplication.AppCompat" />
+
         <activity
             android:name="com.interview.leak.HandlerLeakActivity"
             android:exported="true"

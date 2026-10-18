@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  促销卡元件（横滑楼层的第一张，通常是"整点开抢"这类入口）。
+
+  ⚠️ 这个布局同时被**两种宿主**使用：
+    1. 横滑楼层的内层横向 RecyclerView；
+    2. 万一服务端把它放进宫格楼层（宽度由 span 决定）。
+
+  宽度统一写 match_parent、由宿主决定 —— 这正是"元件只描述自己、不描述位置"的落地。
+  但**横向列表里的 item 有个必须显式处理的坑**：`LinearLayoutManager(HORIZONTAL)`
+  对 `match_parent` 宽度的 item 会**按父容器宽度**测量，于是每张卡片占满整屏、
+  一屏只能看到一张。所以渲染层（ElementRowAdapter.onBindViewHolder）会在横滑场景下
+  把宽度覆盖成固定 dp。为什么不在 layout 里直接写固定宽度：
+  那样宫格场景（需要 match_parent）就拿不到自适应宽度了，
+  而元件不该为"自己被谁放着"而写死尺寸。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    android:background="@drawable/ec_bg_promo"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:padding="10dp">
+
+    <TextView
+        android:id="@+id/ec_promo_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/ec_bg_badge"
+        android:paddingHorizontal="6dp"
+        android:paddingVertical="1dp"
+        android:textColor="#FFFFFF"
+        android:textSize="10sp"
+        tools:text="10:00" />
+
+    <TextView
+        android:id="@+id/ec_promo_title"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        tools:text="抢" />
+
+    <TextView
+        android:id="@+id/ec_promo_subtitle"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
+        android:textColor="#FFD8D8"
+        android:textSize="11sp"
+        tools:text="整点开抢" />
+
+</LinearLayout>

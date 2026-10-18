@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  横滑楼层容器。
+
+  ★ 这是三种排列策略里**唯一有"容器"的一层**。
+  它因此获得了两个展平楼层没有的能力：
+    1. 可以渲染 `component.title`（"限时秒杀"）—— 展平楼层没有 View 承载标题，
+       只能由 section_header 元件代劳；
+    2. 内部可以挂**另一个滚动方向**的 RecyclerView。
+
+  ⚠️ 内层 RecyclerView 的高度必须**确定**（这里 168dp）。
+  若写 wrap_content，在外层竖直 RV 里会先按 0 高度测量，
+  随后内容到达才撑开 → 列表整体跳动。横向列表的内容高度是可控的，
+  给固定值是最稳的（也符合电商横滑楼层的实际做法：高度一致才好对齐）。
+
+  ⚠️ 整个容器在外层只占**一个 item**（spanSize = 满行），
+  它内部有多少元素**不影响外层 item 数** —— 但会导致外层要回收的
+  ViewHolder 数量与"可见的卡片数"不再一一对应，这是展平+容器混合方案
+  必须接受的现实（内层的复用由内层自己负责，与外层共享池）。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    android:background="@drawable/ec_bg_card"
+    android:orientation="vertical"
+    android:paddingHorizontal="8dp"
+    android:paddingTop="8dp"
+    android:paddingBottom="4dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <View
+            android:layout_width="3dp"
+            android:layout_height="14dp"
+            android:background="#E02020" />
+
+        <TextView
+            android:id="@+id/ec_floor_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="6dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#1A1A1A"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            tools:text="限时秒杀" />
+
+        <TextView
+            android:id="@+id/ec_floor_more"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="?android:attr/selectableItemBackground"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp"
+            android:text="更多 ›"
+            android:textColor="#9A9A9A"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/ec_floor_list"
+        android:layout_width="match_parent"
+        android:layout_height="214dp"
+        android:layout_marginTop="4dp"
+        android:clipToPadding="false"
+        android:orientation="horizontal"
+        android:scrollbars="none"
+        tools:listitem="@layout/ec_item_product" />
+
+</LinearLayout>

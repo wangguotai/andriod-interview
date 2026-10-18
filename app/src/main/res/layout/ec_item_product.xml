@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  商品卡元件。
+
+  这是**跨楼层复用率最高**的一类元件（推荐、秒杀、清单里都是它），
+  所以它是否能在楼层间共用 ViewHolder，直接决定整页滚动性能。
+  复用靠的是 ConcatAdapter 的 isolateViewTypes=false，见 PagePlanRenderer 注释 ②。
+
+  ⚠️ 宽度 match_parent（由 span 决定），高度 wrap_content。
+  商品图用固定高度 120dp（而不是宽高比）：
+  展平方案里 item 宽度**随列数变化**（2 列时是 1/2 屏，4 列时是 1/4 屏），
+  若图高按宽度比例算，同一张卡在不同楼层高度不同 —— 而 RecyclerView 的高度
+  必须在测量前确定，动态比例会引发反复 requestLayout。
+  固定高度是最稳的选择。
+
+  ⚠️ 在**横滑楼层**里，宿主是横向 LinearLayoutManager，match_parent 宽度会被解释成
+  "占满父容器"（一屏一张卡）。渲染层会显式覆盖宽度，见 ec_item_promo.xml 的说明。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    android:background="@drawable/ec_bg_card"
+    android:orientation="vertical"
+    android:padding="6dp">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="120dp">
+
+        <ImageView
+            android:id="@+id/ec_product_image"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#E8E8E8"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop" />
+
+        <TextView
+            android:id="@+id/ec_product_badge"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|start"
+            android:background="@drawable/ec_bg_badge"
+            android:paddingHorizontal="6dp"
+            android:paddingVertical="1dp"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:visibility="gone"
+            tools:text="直降500"
+            tools:visibility="visible" />
+    </FrameLayout>
+
+    <TextView
+        android:id="@+id/ec_product_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:ellipsize="end"
+        android:maxLines="2"
+        android:minLines="2"
+        android:textColor="#1A1A1A"
+        android:textSize="12sp"
+        tools:text="轻薄羽绒服 90 白鸭绒" />
+
+    <!--
+      minLines=2 与 ellipsize：标题占用 2 行的高度**固定**，
+      这样同楼层里"标题一行"与"标题两行"的商品卡高度一致，
+      不会出现宫格里参差不齐（宫格错落会让用户以为布局坏了）。
+      用固定行数而不是自适应，是宫格布局的常规做法。
+    -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:gravity="bottom"
+        android:orientation="horizontal">
+
+        <TextView
+            android:id="@+id/ec_product_price"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textColor="#E02020"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="¥399" />
+
+        <TextView
+            android:id="@+id/ec_product_original_price"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:layout_weight="1"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="#9A9A9A"
+            android:textSize="11sp"
+            android:visibility="gone"
+            tools:text="¥899"
+            tools:visibility="visible" />
+    </LinearLayout>
+
+</LinearLayout>

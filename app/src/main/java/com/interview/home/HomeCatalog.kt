@@ -89,6 +89,15 @@ object HomeCatalog {
             activityClass = com.interview.plugin.PluginLabActivity::class.java,
             tag = "plugin",
         ),
+        HomeEntry(
+            title = "组件化首页 Lab",
+            subtitle = "组件（排列策略）+ 元件，JSON 下发；展平方案跨楼层共享 ViewHolder 池",
+            // 单一 RecyclerView + ConcatAdapter + GridLayoutManager.SpanSizeLookup。
+            // 与下面「RecyclerView Demo」那条的区别：那条讲 LayoutManager 与缓存原理，
+            // 这条讲"页面结构由数据决定"时的工程取舍（展平 vs 内嵌容器的对照实验）。
+            activityClass = com.interview.ec.EcHomeActivity::class.java,
+            tag = "recyclerview",
+        ),
     )
 
     /** 基础：单点知识 / 控件练习页 */

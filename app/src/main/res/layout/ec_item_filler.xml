@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  断行补齐用的占位行。
+
+  ★ 高度必须是 0dp（且不能有 margin/padding），否则"补齐"本身会引入可见空白，
+  那就等于把问题从"不确定的空白"换成了"确定的空白"—— 没解决问题。
+
+  它存在的唯一目的是让 GridLayoutManager 把当前行**确定地**结束掉，
+  见 PagePlanBuilder.flatten 里对断行问题的完整推导。
+-->
+<View xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="0dp" />

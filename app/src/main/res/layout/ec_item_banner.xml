@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通栏大图元件。
+
+  ⚠️ 宽度一定写 match_parent、高度写 wrap_content 或固定值 —— **绝不能写具体宽度**。
+  展平方案下，item 的宽度由「占多少 span × 每 span 多宽」决定，
+  LayoutManager 会在 bind 时重建 LayoutParams 并覆盖这里的 width
+  （见 RecyclerView.java:6926）。写死宽度只会误导读代码的人以为它在起作用。
+
+  高度取 4:3 左右的固定 dp：轮播图必须给出**确定高度**，
+  否则「图未到达」时 item 高度为 0，图片到达后高度跳变，
+  表现为列表整体往上"弹"一下（这正是 RecyclerView 布局里的经典抖动）。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="4dp"
+    android:background="@drawable/ec_bg_card"
+    android:minHeight="150dp">
+
+    <ImageView
+        android:id="@+id/ec_banner_image"
+        android:layout_width="match_parent"
+        android:layout_height="150dp"
+        android:background="#E8E8E8"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
+
+    <TextView
+        android:id="@+id/ec_banner_badge"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|end"
+        android:layout_margin="8dp"
+        android:background="@drawable/ec_bg_badge"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="2dp"
+        android:textColor="#FFFFFF"
+        android:textSize="11sp"
+        android:visibility="gone"
+        tools:text="限时"
+        tools:visibility="visible" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="#99000000"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp">
+
+        <TextView
+            android:id="@+id/ec_banner_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#FFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="818 大促主会场" />
+
+        <TextView
+            android:id="@+id/ec_banner_subtitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textColor="#E0FFFFFF"
+            android:textSize="12sp"
+            tools:text="跨店满 300 减 50" />
+    </LinearLayout>
+
+</FrameLayout>

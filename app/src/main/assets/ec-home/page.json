@@ -1,0 +1,120 @@
+{
+  "schemaVersion": "1.0",
+  "page": {
+    "title": "数据驱动首页",
+    "components": [
+      {
+        "id": "c_top_banner",
+        "type": "banner",
+        "title": null,
+        "style": { "background": "#FFFFFF", "paddingDp": 8, "card": true },
+        "elements": [
+          {
+            "id": "e_banner_1",
+            "type": "banner_image",
+            "title": "818 大促主会场",
+            "subtitle": "跨店满 300 减 50",
+            "imageUrl": "https://picsum.photos/seed/ec-banner-1/1200/560",
+            "badge": "限时",
+            "target": "app://activity/promotion?id=818",
+            "needsFullRow": true
+          }
+        ]
+      },
+      {
+        "id": "c_kingkong",
+        "type": "grid",
+        "columns": 5,
+        "title": "金刚区",
+        "style": { "background": "#FFFFFF", "paddingDp": 8, "card": true },
+        "elements": [
+          { "id": "e_kk_1", "type": "icon_entry", "title": "百亿补贴", "imageUrl": "https://picsum.photos/seed/ec-kk-1/200/200", "target": "app://channel/subsidy" },
+          { "id": "e_kk_2", "type": "icon_entry", "title": "限时秒杀", "imageUrl": "https://picsum.photos/seed/ec-kk-2/200/200", "target": "app://channel/flash" },
+          { "id": "e_kk_3", "type": "icon_entry", "title": "超市", "imageUrl": "https://picsum.photos/seed/ec-kk-3/200/200", "target": "app://channel/market" },
+          { "id": "e_kk_4", "type": "icon_entry", "title": "会员", "imageUrl": "https://picsum.photos/seed/ec-kk-4/200/200", "target": "app://channel/vip" },
+          { "id": "e_kk_5", "type": "icon_entry", "title": "签到", "imageUrl": "https://picsum.photos/seed/ec-kk-5/200/200", "target": "app://channel/signin" },
+          { "id": "e_kk_6", "type": "icon_entry", "title": "9.9包邮", "imageUrl": "https://picsum.photos/seed/ec-kk-6/200/200", "target": "app://channel/cheap" },
+          { "id": "e_kk_7", "type": "icon_entry", "title": "数码", "imageUrl": "https://picsum.photos/seed/ec-kk-7/200/200", "target": "app://channel/digital" },
+          { "id": "e_kk_8", "type": "icon_entry", "title": "服饰", "imageUrl": "https://picsum.photos/seed/ec-kk-8/200/200", "target": "app://channel/clothes" },
+          { "id": "e_kk_9", "type": "icon_entry", "title": "生鲜", "imageUrl": "https://picsum.photos/seed/ec-kk-9/200/200", "target": "app://channel/fresh" },
+          { "id": "e_kk_10", "type": "icon_entry", "title": "全部", "imageUrl": "https://picsum.photos/seed/ec-kk-10/200/200", "target": "app://channel/all" }
+        ]
+      },
+      {
+        "id": "c_flash_sale",
+        "type": "horizontal",
+        "title": "限时秒杀",
+        "style": { "background": "#FFF4F4", "paddingDp": 8, "card": true },
+        "elements": [
+          { "id": "e_fs_1", "type": "promo", "title": "抢", "subtitle": "整点开抢", "badge": "10:00", "target": "app://promo/flash-1" },
+          { "id": "e_fs_2", "type": "product", "title": "无线蓝牙耳机", "imageUrl": "https://picsum.photos/seed/ec-fs-2/400/400", "priceCents": 12900, "originalPriceCents": 29900, "badge": "4.3折" },
+          { "id": "e_fs_3", "type": "product", "title": "便携榨汁杯", "imageUrl": "https://picsum.photos/seed/ec-fs-3/400/400", "priceCents": 3990, "originalPriceCents": 8900, "badge": "爆款" },
+          { "id": "e_fs_4", "type": "product", "title": "折叠雨伞", "imageUrl": "https://picsum.photos/seed/ec-fs-4/400/400", "priceCents": 2990, "originalPriceCents": 5900 },
+          { "id": "e_fs_5", "type": "product", "title": "陶瓷马克杯", "imageUrl": "https://picsum.photos/seed/ec-fs-5/400/400", "priceCents": 1990, "originalPriceCents": 3900 },
+          { "id": "e_fs_6", "type": "product", "title": "棉质毛巾两件", "imageUrl": "https://picsum.photos/seed/ec-fs-6/400/400", "priceCents": 1590, "originalPriceCents": 2990 }
+        ]
+      },
+      {
+        "id": "c_recommend_2col",
+        "type": "grid",
+        "columns": 2,
+        "title": "为你推荐",
+        "style": { "background": "#F5F6F8", "paddingDp": 4, "card": true },
+        "elements": [
+          { "id": "e_hdr_rec", "type": "section_header", "title": "为你推荐", "subtitle": "根据浏览记录生成", "target": "app://recommend/more", "needsFullRow": true },
+          { "id": "e_rec_1", "type": "product", "title": "轻薄羽绒服", "imageUrl": "https://picsum.photos/seed/ec-rec-1/600/600", "priceCents": 39900, "originalPriceCents": 89900, "badge": "直降500" },
+          { "id": "e_rec_2", "type": "product", "title": "人体工学椅", "imageUrl": "https://picsum.photos/seed/ec-rec-2/600/600", "priceCents": 89900, "originalPriceCents": 129900, "badge": "包安装" },
+          { "id": "e_rec_3", "type": "product", "title": "机械键盘 87 键", "imageUrl": "https://picsum.photos/seed/ec-rec-3/600/600", "priceCents": 32900, "originalPriceCents": 45900 },
+          { "id": "e_rec_4", "type": "product", "title": "4K 显示器 27 英寸", "imageUrl": "https://picsum.photos/seed/ec-rec-4/600/600", "priceCents": 129900, "originalPriceCents": 169900, "badge": "顺丰" },
+          { "id": "e_rec_5", "type": "product", "title": "智能手表", "imageUrl": "https://picsum.photos/seed/ec-rec-5/600/600", "priceCents": 69900, "originalPriceCents": 99900 },
+          { "id": "e_rec_6", "type": "product", "title": "扫地机器人", "imageUrl": "https://picsum.photos/seed/ec-rec-6/600/600", "priceCents": 159900, "originalPriceCents": 219900, "badge": "赠滤芯" },
+          { "id": "e_rec_7", "type": "product", "title": "空气炸锅 5L", "imageUrl": "https://picsum.photos/seed/ec-rec-7/600/600", "priceCents": 45900, "originalPriceCents": 69900 },
+          { "id": "e_rec_8", "type": "product", "title": "电动牙刷", "imageUrl": "https://picsum.photos/seed/ec-rec-8/600/600", "priceCents": 19900, "originalPriceCents": 39900 }
+        ]
+      },
+      {
+        "id": "c_bad_columns",
+        "type": "grid",
+        "columns": 7,
+        "title": "异常列数（7 不是 60 的约数）",
+        "style": { "background": "#FFFFFF", "paddingDp": 8, "card": true },
+        "elements": [
+          { "id": "e_bad_1", "type": "icon_entry", "title": "会被夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-1/200/200" },
+          { "id": "e_bad_2", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-2/200/200" },
+          { "id": "e_bad_3", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-3/200/200" },
+          { "id": "e_bad_4", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-4/200/200" },
+          { "id": "e_bad_5", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-5/200/200" },
+          { "id": "e_bad_6", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-6/200/200" },
+          { "id": "e_bad_7", "type": "icon_entry", "title": "夹到 6 列", "imageUrl": "https://picsum.photos/seed/ec-bad-7/200/200" }
+        ]
+      },
+      {
+        "id": "c_future",
+        "type": "live_stream_room",
+        "title": "未来组件（客户端不认识）",
+        "style": { "background": "#FFFFFF", "paddingDp": 8, "card": true },
+        "elements": [
+          { "id": "e_future_1", "type": "live_room_card", "title": "直播间卡片", "imageUrl": "https://picsum.photos/seed/ec-future-1/400/400" }
+        ]
+      },
+      {
+        "id": "c_mixed",
+        "type": "grid",
+        "columns": 4,
+        "title": "混排：标题横跨 + 元素降级",
+        "style": { "background": "#FFFFFF", "paddingDp": 8, "card": true },
+        "elements": [
+          { "id": "e_mix_hdr", "type": "section_header", "title": "好物清单", "subtitle": "4 列宫格里的通栏标题", "needsFullRow": true },
+          { "id": "e_mix_1", "type": "product", "title": "香薰蜡烛", "imageUrl": "https://picsum.photos/seed/ec-mix-1/400/400", "priceCents": 5900 },
+          { "id": "e_mix_2", "type": "product", "title": "帆布袋", "imageUrl": "https://picsum.photos/seed/ec-mix-2/400/400", "priceCents": 3900 },
+          { "id": "e_mix_3", "type": "product", "title": "玻璃水杯", "imageUrl": "https://picsum.photos/seed/ec-mix-3/400/400", "priceCents": 2900 },
+          { "id": "e_mix_4", "type": "product", "title": "桌面收纳", "imageUrl": "https://picsum.photos/seed/ec-mix-4/400/400", "priceCents": 4900 },
+          { "id": "e_mix_unknown", "type": "ar_try_on", "title": "AR 试穿（客户端不认识）" },
+          { "id": "e_mix_5", "type": "product", "title": "便携充电宝", "imageUrl": "https://picsum.photos/seed/ec-mix-5/400/400", "priceCents": 8900, "badge": "20000mAh" },
+          { "id": "e_mix_6", "type": "product", "title": "数据线三合一", "imageUrl": "https://picsum.photos/seed/ec-mix-6/400/400", "priceCents": 1900 },
+          { "id": "e_mix_7", "type": "product", "title": "鼠标垫", "imageUrl": "https://picsum.photos/seed/ec-mix-7/400/400", "priceCents": 1500 }
+        ]
+      }
+    ]
+  }
+}

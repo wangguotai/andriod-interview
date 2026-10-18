@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  金刚区入口元件。
+
+  这类元件是**列数敏感**的典型：5 列宫格下每个只占 1/5 屏宽（约 72dp），
+  图标 + 10sp 文字才刚刚放得下。这也正是 EcSchema.SPAN_COUNT 必须取 60
+  （而不是 12）的原因 —— 12 表达不了 5 列，见 EcSchema 的推导。
+
+  ⚠️ 宽度 match_parent：宽度完全由 span 决定，所有内容靠 gravity 居中。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="?android:attr/selectableItemBackground"
+    android:gravity="center_horizontal"
+    android:orientation="vertical"
+    android:paddingVertical="8dp">
+
+    <ImageView
+        android:id="@+id/ec_icon_image"
+        android:layout_width="40dp"
+        android:layout_height="40dp"
+        android:background="#E8E8E8"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop" />
+
+    <TextView
+        android:id="@+id/ec_icon_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:ellipsize="end"
+        android:gravity="center"
+        android:maxLines="1"
+        android:textColor="#1A1A1A"
+        android:textSize="11sp"
+        tools:text="百亿补贴" />
+
+</LinearLayout>

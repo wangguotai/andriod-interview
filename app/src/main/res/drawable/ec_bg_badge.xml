@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 角标：红底圆角小标签（"限时"/"直降500"/"10:00"） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#E02020" />
+    <corners android:radius="4dp" />
+</shape>

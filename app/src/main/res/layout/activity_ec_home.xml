@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  数据驱动首页 Lab 的页面骨架。
+
+  ─── 布局分三段，对应三个问题 ───
+    1. 顶部诊断面板：**数据出了什么事**（解析警告 / 降级统计）—— 不连 adb 也能看到；
+    2. 中部实验开关：**这次实验的变量**（共享池开关、数据源切换）；
+    3. 底部列表：被观测对象本体。
+
+  ⚠️ RecyclerView 是**唯一的一个**（没有 ScrollView 套 RV）。
+  这是展平方案的硬要求：外层必须自己滚动，否则嵌套滚动 + span 计算全乱。
+  顶部面板与开关做成**固定区域**（不随列表滚动），是为了让实验时
+  能一边滑动一边看数字 —— 若面板也进列表，滑到商品区就看不到诊断了。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F5F6F8"
+    android:orientation="vertical">
+
+    <!-- ══════════════ 1. 诊断面板 ══════════════ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#101820"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp">
+
+        <TextView
+            android:id="@+id/ec_diag_title"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="装配诊断"
+            android:textColor="#7CF5C0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/ec_diag_summary"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="monospace"
+            android:textColor="#D8E4EC"
+            android:textSize="11sp"
+            tools:text="组件 8 → 楼层 7 / item 34 / span 60 / 警告 3" />
+
+        <TextView
+            android:id="@+id/ec_diag_warnings"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="monospace"
+            android:maxLines="8"
+            android:scrollbars="vertical"
+            android:textColor="#FFD479"
+            android:textSize="11sp"
+            tools:text="· unknown_component @components[5]" />
+
+        <TextView
+            android:id="@+id/ec_diag_pool"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:fontFamily="monospace"
+            android:maxLines="8"
+            android:scrollbars="vertical"
+            android:textColor="#9AD5FF"
+            android:textSize="10sp"
+            tools:text="RecycledViewPool ..." />
+    </LinearLayout>
+
+    <!-- ══════════════ 2. 实验开关 ══════════════ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#FFFFFF"
+        android:orientation="vertical"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="6dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="变量：ConcatAdapter 是否隔离 viewType（隔离 = 每楼层独立 ViewHolder 池）"
+            android:textColor="#666666"
+            android:textSize="11sp" />
+
+        <Switch
+            android:id="@+id/ec_sw_isolate"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="隔离 viewType（对照：关掉后商品卡跨楼层共用池）"
+            android:textSize="12sp" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/ec_btn_scroll_stats"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="滚动到底并统计" />
+
+            <Button
+                android:id="@+id/ec_btn_reset"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="重建页面" />
+
+            <Button
+                android:id="@+id/ec_btn_print_json"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="看原始 JSON" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/ec_stat_hint"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:textColor="#008577"
+            android:textSize="11sp"
+            android:visibility="gone"
+            tools:text="createViewHolder 次数：product=6" />
+    </LinearLayout>
+
+    <!-- ══════════════ 3. 被观测对象 ══════════════ -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/ec_recycler"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:paddingBottom="12dp"
+        android:scrollbars="vertical" />
+
+</LinearLayout>

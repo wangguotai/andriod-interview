@@ -54,6 +54,28 @@ fun optFlag(name: String): Boolean {
     }
 }
 
+// ─── 崩溃上报配置（local.properties → BuildConfig）───
+//
+// 目的：让 `CrashUploader` 能拿到真实 endpoint/token，而**不把它们写进源码**。
+//   local.properties 已在 .gitignore 里（只本机可见）→ Gradle 读它 → 注入 BuildConfig。
+// 这样"演示项泄露成生产配置"那条红线仍然成立：仓库里只有**注释掉的示例**。
+//
+// 机器上从没配过这两个 key 时，getProperty 返回 null → 空串。
+// CrashUploader.isConfigured() 据此返回 false，UI 显示"未配置"（而不是"上报失败"）。
+//
+// ⚠️ 转义：buildConfigField 的最后一个参数是一段**要写进生成的 Java 源文件**的字面量，
+//    我们在外面手工拼双引号。值里若含 " 或 \ （token 里不罕见），不转义就会直接
+//    破坏 Java 语法 → 编译期报一堆指向 BuildConfig 的诡异错误。所以统一过 escapeJava。
+fun escapeJava(value: String): String =
+    value.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "")
+
+val crashLocalProps = Properties()
+rootProject.file("local.properties").takeIf { it.exists() }?.let { f ->
+    f.inputStream().use { crashLocalProps.load(it) }
+}
+val crashUploadUrl: String = crashLocalProps.getProperty("crash.upload.url").orEmpty()
+val crashUploadToken: String = crashLocalProps.getProperty("crash.upload.token").orEmpty()
+
 val optAll = optFlag("opt.all")
 val optShrink = optAll || optFlag("opt.shrink")
 val optAudit = optAll || optFlag("opt.audit")
@@ -91,6 +113,12 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // ─── 崩溃上报 endpoint/token（值来自 local.properties，见文件头 escapeJava）───
+        // 没配就是空串：这会驱动 CrashUploader.isConfigured() == false，
+        // 上报出口保持"未配置"状态（**不是**"上报失败" —— 两者处置完全不同）。
+        buildConfigField("String", "CRASH_UPLOAD_URL", "\"${escapeJava(crashUploadUrl)}\"")
+        buildConfigField("String", "CRASH_UPLOAD_TOKEN", "\"${escapeJava(crashUploadToken)}\"")
 
         // ─── ABI 只保留 arm64-v8a ───
         //
@@ -146,6 +174,11 @@ android {
     }
     buildFeatures {
         compose = true
+        // ─── buildConfig：AGP 8 起默认**关闭** ───
+        // 不打开的话 buildConfigField(...) 会被静默忽略（或直接报"未开启"），
+        // 于是 CrashUploader 里引用的 BuildConfig.CRASH_UPLOAD_URL 编译不过。
+        // 本仓库插件现已依赖它，所以这里必须显式打开。
+        buildConfig = true
         // ─── prefab：把依赖 AAR 里的预编译 .so 暴露给 CMake ───
         // memtrace（native 内存分配归因）依赖 bytehook 的 .so，而 bytehook 以 AAR
         // 分发（.so 放在 AAR 的 prefab/ 目录）。不打开这个开关，CMake 侧

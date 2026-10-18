@@ -47,6 +47,45 @@ add_library(memtrace SHARED memtrace.cpp)
 target_link_libraries(memtrace ${log-lib} dl bytehook::bytehook)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# nativecrash：Native 崩溃现场取证（信号 handler → 全线程栈 + 寄存器 + maps/fd）
+#
+# 单独成一个 .so 的理由与 anrsignal 同一个逻辑 —— **失败后果不同**：
+#   · anrsignal 装错会拖慢系统 dump trace（最长 20s）
+#   · memtrace  装错会挂在全局内存分配热路径上
+#   · nativecrash 装错会**顶掉系统的崩溃取证**（debuggerd/tombstone 消失）
+#     三者里这一条后果最重，所以它必须能被独立 loadLibrary 失败、独立降级，
+#     且能在 logcat 里单独观察它的安装/卸载。
+#
+# ⚠️⚠️ 这里**刻意不加任何 TLS 相关 flag** —— 这是一个**实测修正**，很重要：
+#
+#   本文件最初用 `__thread` 存"每线程抓栈槽位"，并加了
+#   `-fno-emulated-tls -ftls-model=initial-exec`（当时的推理：动态 TLS 模型会走
+#   `__tls_get_addr` → 在信号处理器里可能拿 linker 锁 → 死锁）。
+#   那个推理**是对的一半**，但结论是错的 —— 真机上它**根本装不起来**：
+#
+#     dlopen failed: TLS symbol "(null)" in dlopened ".../libnativecrash.so"
+#     referenced from ".../libnativecrash.so" using IE access model
+#
+#   两条路都堵死（实测，见 native_crash_handler.cpp 文件头 §2 的完整记录）：
+#     · `initial-exec`：bionic 的 linker **不允许被 dlopen 的 .so 引用它自己的
+#       非导出 static TLS 符号**（这就是那个 "(null)" —— linker 拿不到 local 符号名）。
+#       而 `__thread Slot g_slot;` 在文件作用域天然就是这种符号。
+#     · 动态模型 / emulated TLS：能加载，但每次访问都要拿 linker 的锁 ——
+#       在崩溃现场那是**自己把自己锁死**。
+#
+#   ⇒ 结论：**信号处理器里不该碰 TLS**（无论哪种模型）。
+#     现在的实现改成「tid → 槽位」的开放寻址表（每线程读一次
+#     `/proc/self/task/<tid>/stat` 的 processor 字段来分散哈希），**零 TLS、零锁**。
+#
+#   ⚠️ 所以这个文件里如果将来有人又想加回 `__thread`，先读上面这段。
+#      自查命令（都是**看产物**，不是看 flag）：
+#         llvm-readelf -S libnativecrash.so | grep tls    # 应当什么都没有
+#         adb logcat -s NativeCrash                        # 应当有"已安装"，不是 dlopen failed
+# ─────────────────────────────────────────────────────────────────────────────
+add_library(nativecrash SHARED native_crash_handler.cpp)
+target_link_libraries(nativecrash ${log-lib} dl)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # oomsnapshot：JVM OOM 现场取证 —— fork 出子进程，由子进程 dump 父进程的堆快照
 #
 # 单独成一个 .so 的理由和其它第三方库注册处同一个逻辑 —— **失败后果不同**：

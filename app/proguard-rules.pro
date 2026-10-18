@@ -74,13 +74,26 @@
 #   · com.interview.memtrace.MemTraceNative         → libmemtrace.so  (bytehook)
 #   · com.interview.vmp.nativebridge.VmpNative      → libvmp_android.so (Rust, 来自 :vmp-core)
 #   · com.interview.thread.NativeThreadHook         → libthreadhook.so
+#   · com.interview.nativecrash.NativeCrashHandler  → libnativecrash.so
 #   · com.interview.oomdump.OomSnapshotNative        → liboomsnapshot.so
 #
-# ⚠️ oomsnapshot 的 JNI 声明类**必须在 ASCII 包** `com.interview.oomdump` 里：
-#    ART 查符号时会把类名里的每个非 ASCII 字节转义成 `_0XX`，而 clang 导出的是
-#    原始 UTF-8 字节 —— 两者永远对不上，编译期无感、运行期 UnsatisfiedLinkError。
-#    （与 `com.interview.memtrace` / `com.interview.anrsignal` 同一条约束，
-#      实证见 `AnrSigquitHook.kt:12-26`。）
+# ⚠️ 上面这一行（NativeCrashHandler）有一条**实测教训**必须留档：
+#
+#     第一版曾把 JNI 声明类放在中文包 `com.interview.稳定性监控` 里，并在 C++ 侧
+#     `extern "C"` 直接声明带 UTF-8 中文包段的符号。clang 宽容地编译过了、
+#     `llvm-nm` 也能看到导出符号 —— 但**运行期必挂**：
+#
+#       UnsatisfiedLinkError: No implementation found for
+#         ...NativeCrashHandler.installNative(...)
+#       (tried Java_com_interview__07a33_05b9a_06027_076d1_063a7_NativeCrashHandler_installNative ...)
+#
+#     ART 查符号时把类名里的**每个非 ASCII 字节按 JNI 规范转义成 `_0XX`**，
+#     而 clang 导出的是**原始 UTF-8 字节** —— 两者永远对不上。能编译 ≠ 能链接。
+#     （这与 `AnrSigquitHook.kt:12-26` 早就写明的结论一致。）
+#
+#     ⇒ JNI 边界类必须放 ASCII 包（`com.interview.nativecrash`），
+#       业务类留在中文包，由 `NativeCrashCollector` 隔一跳转发。
+# ─────────────────────────────────────────────────────────────────────
 #
 # ⚠️ -keepclasseswithmembernames 只对**存活类**生效：R8 若先把整个类判定为
 #    不可达并删掉，规则也救不回来。所以下面逐个显式 -keep 这些桥接类 ——
@@ -95,6 +108,7 @@
 -keep class com.interview.image.nativebridge.** { *; }
 -keep class com.interview.memtrace.** { *; }
 -keep class com.interview.vmp.nativebridge.** { *; }
+-keep class com.interview.nativecrash.** { *; }
 -keep class com.interview.oomdump.** { *; }
 # thread 包整体保住：既含 NativeThreadHook（JNI），又含 ASM 改写的落点（见第 4 节）
 -keep class com.interview.thread.** { *; }

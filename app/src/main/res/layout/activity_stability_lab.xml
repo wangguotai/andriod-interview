@@ -226,7 +226,66 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="模拟上报" />
+            android:text="立即上报" />
+    </LinearLayout>
+
+    <!-- ═══ Native 崩溃取证（进程内）═══
+         与上面的「⚠Native崩(说明)」是三件事：那个只输出说明，
+         这一排会**真的把进程崩掉**（所以按钮文案带 ⚠），
+         崩溃后报告落盘，下次进入本页可回捞查看。 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_native_grab"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Native取证状态" />
+
+        <Button
+            android:id="@+id/btn_native_recover"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="回捞Native报告" />
+
+        <Button
+            android:id="@+id/btn_native_upload"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="上报出口状态" />
+    </LinearLayout>
+
+    <!-- 三种崩溃形态：用于 si_code 归因对照（SIGABRT/SI_TKILL vs SEGV_MAPERR vs 栈溢出） -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btn_native_abort"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚠Native崩(ABRT)" />
+
+        <Button
+            android:id="@+id/btn_native_null"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚠空指针(SEGV)" />
+
+        <Button
+            android:id="@+id/btn_native_stack"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="⚠栈溢出" />
     </LinearLayout>
 
     <ScrollView

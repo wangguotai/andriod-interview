@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.os.Process
 import android.util.Log
 import com.interview.thread.ThreadPools
+import com.interview.nativecrash.NativeCrashHandler
 
 /**
  * Time: 2026/10/7
@@ -112,6 +113,25 @@ object StabilityMonitor {
     fun installEarly(app: Application) {
         CrashMonitor.install(app, swallowBackground = true)
         StabilityReporter.bindThreadGovernance()
+        // ── native 崩溃取证（全线程栈 + 寄存器 + maps/fd 现场）──
+        //
+        // ⚠️ 放在**这里**而不是 onCreate，理由与 CrashMonitor.install 完全相同：
+        //    这是"越早越好"的一类动作，晚装一秒就漏一秒。差别在于抓的对象：
+        //    CrashMonitor 只能兜 attachBaseContext 之后的 **Java 异常**，
+        //    而本模块接的是 **native 信号** —— 它连 ART 都不需要参与，
+        //    所以在 ART 尚未完全就绪时崩（例如某个 SDK 的 .so 在静态初始化里崩了）
+        //    也只有它能抓到。
+        //
+        // ⚠️ 诚实边界（决定了"两条链路为什么都得留"）：
+        //    `Application` 的**类加载与 `<clinit>`** 发生在 attachBaseContext **之前**，
+        //    那段时间的 native 崩溃本模块抓不到 —— 只剩
+        //    `AnrMonitor.ExitInfoCollector`（但它要 API 30+，本仓库 minSdk 24）。
+        //    ⇒ 两者互补，谁都不能删。
+        //
+        // ⚠️ install 返回 false 是**正常状态**：非 arm64 设备上这个 .so 不存在
+        //    （abiFilters 见 app/build.gradle.kts），此时只打一条 warning，
+        //    **绝不能影响**上面两行的 Java 链路。
+        NativeCrashHandler.install(app)
         // ⚠️ 刻意**不**在这里给 sink 赋一个"打 logcat"的实现：
         //    `drainTo` 本身就会 logcat，两者叠加会让同一条事件打印两遍
         //    （实测过的现象）。sink 的定位是**接三方平台**，本仓库不内置 ——
@@ -136,6 +156,21 @@ object StabilityMonitor {
         val recovered = CrashMonitor.recoverPending(app)
         if (recovered.isNotEmpty()) {
             Log.w(TAG, "补报 ${recovered.size} 条上次的崩溃遗嘱")
+        }
+
+        // ③b native 崩溃报告回捞（**同样必须同步、且必须在 ExitInfo 之前排队**）
+        //
+        // 与 ExitInfo 回捞的关键区别：ExitInfo 是"问系统"（要 binder、要等系统组装
+        // proto trace，可能上百毫秒），而我们这个是**纯本地读文件 + 解析文本** ——
+        // 文件通常几十~几百 KB，解析是字符串操作。所以：
+        //   · 它可以**同步**做（读文件快、条数少，与 ③ 的遗嘱同级）；
+        //   · 但**仍丢到后台泳道**——因为解析 maps 是 CPU 活，且"启动路径上不做
+        //     非必要工作"是本仓库的既定纪律（宁晚 200ms，不占启动预算）。
+        // 顺序上先于 ExitInfo：本通道给的是**一手现场**（寄存器/fd/我们的栈），
+        // ExitInfo 给的是系统视角 —— 先到手的证据优先级更高。
+        ThreadPools.background.execute("native.crash.recover") {
+            val n = NativeCrashCollector.recoverAndReport(app)
+            if (n > 0) Log.e(TAG, "native 崩溃回捞：$n 条已交给上报出口（走 CrashJournal 遗嘱 + 环形缓冲）")
         }
 
         // ⑤ ANR 探针（哨兵 + Looper 旁听）
@@ -290,7 +325,35 @@ object StabilityMonitor {
          * 保证"手动"和"周期"走的是**同一段代码**，不会一个能清账另一个不能）。
          */
         fun flushNow(reason: String): Boolean =
-            flush { batch -> simulatedUpload(batch, reason) }
+            flush { batch -> uploadBatch(batch, reason) }
+
+        /**
+         * 出口选择：**配了 endpoint 就真发，没配就退回模拟提交**。
+         *
+         * ⚠️ 这个"二选一"是刻意的，而且两条路的**清账语义不同**，必须写清楚：
+         *
+         * ```
+         *   已配置 CrashUploader  →  真实 HTTP。2xx 才算 true（才清账/清遗嘱）
+         *   未配置               →  退回 simulatedUpload，**恒定返回 true**
+         * ```
+         *
+         * 为什么未配置时不干脆返回 false（那样"事件不丢"看起来更安全）？
+         * 因为那会让**整个实验页看不出任何东西**：事件永远留在环形缓冲里、
+         * "已提交 N 批次"永远是 0、uploadLog 永远空 —— 而这套模块的每一个结论
+         * 都靠实验页当场可见来验证（`ReportDriver` 的类注释最后一段就是在讲这件事：
+         * "模拟提交能被验证的前提是它真的留下了痕迹"）。
+         * ⇒ 口径是：**没配 endpoint = 本地链路演示模式**，此时"上报成功"的含义
+         *    就是"本地链路走通了"；配了 endpoint 才是"服务端收到了"。
+         *    `describe()` 里必须把当前处于哪一档显式打出来（见下），
+         *    否则使用者会以为"能上报了"而其实根本没联网。
+         */
+        private fun uploadBatch(batch: List<StabilityReporter.Event>, reason: String): Boolean {
+            return if (CrashUploader.isConfigured()) {
+                CrashUploader.upload(batch)
+            } else {
+                simulatedUpload(batch, reason)
+            }
+        }
 
         private fun tick(reason: String) {
             runCatching { flushNow(reason) }
@@ -368,6 +431,28 @@ object StabilityMonitor {
         appendLine("  通道3 Looper 旁听：已挂（阈值 500ms）")
         appendLine("  通道4 SIGQUIT 拦截：${AnrSigquitChannel.shortStatus()}（实验通道，默认不装）")
         appendLine("  卡住时主线程等待点：${AnrMonitor.lastBlockSite() ?: "（尚未采到）"}")
+        appendLine()
+        // ── native 崩溃取证 + 上报出口的真实状态 ──
+        //
+        // ⚠️ 这两块必须进总览，而且必须**显式打出当前的上报出口档位**。
+        //    理由：`ReportDriver` 现在是"配了 endpoint 真发 / 没配就模拟提交"的二选一
+        //    （见 uploadBatch 的注释）。如果不在这里标出来，使用者会看到
+        //    "已提交 N 批次"而**误以为真的上报出去了** —— 那正是
+        //    `INTERVIEW-线上ANR监控方案.md` §1 审出的那个缺口的另一种形态：
+        //    数据链路的最后一跳断了，但界面上完全看不出来。
+        context()?.let { ctx ->
+            appendLine(NativeCrashCollector.describeStatus(ctx))
+            appendLine()
+        }
+        appendLine("── 上报出口 ──")
+        appendLine(
+            if (CrashUploader.isConfigured())
+                "  ✅ 真实 HTTP（endpoint 已配置）—— 2xx 才算成功，失败会保留事件"
+            else
+                "  ⚠️ **模拟提交**（local.properties 未配 crash.upload.url）—— 走的是本地链路，" +
+                        "\n     \"已提交\"只代表本地链路走通，**没有任何网络请求发出**。" +
+                        "\n     配法见 local.properties 里的注释示例。"
+        )
         appendLine()
         appendLine("── 主线程采样 ──")
         appendLine("  样本数：${MainThreadSampler.total()}（上限 20000，有界）")

@@ -74,21 +74,50 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 「至少不会丢」——这也是线上崩溃监控的第一性要求。
  *
  * ══════════════════════════════════════════════════════════════════════
- * 四、Native 崩溃：App 内**接不住**，别假装能接
+ * 四、Native 崩溃：**本节已更新（2026-10-16）**，旧结论只否决了一种做法
  * ══════════════════════════════════════════════════════════════════════
  *
- * 可以在 native 侧注册 `signal handler`（SIGSEGV 等）自己抓，但在 App 内做这件事
- * 有三个硬伤，本项目**不做**：
- *  1. **信号处理器运行在崩溃现场，栈可能已经损坏**，能在里面安全调用的函数极少；
- *  2. ART 自己就装了 handler（用于把 native crash 转成 Java 异常的地方）——
- *     抢装/链式调用容易把系统的崩溃收集（debuggerd/tombstone）搞坏，
- *     反而**丢掉平台侧证据**；
- *  3. Android 10+ 有 **crash_dump / debuggerd** 这套统一机制，
- *     自己抓的质量不如系统，且拿不到符号化所需的全部上下文。
+ * ⚠️ 先读这段再读下面。本节原来写着「App 内不该接 native 崩溃，本项目不做」，
+ *    并列了三条理由。**那三条理由本身都是真的**，但它们只否决了
+ *    「用自研 handler **替换**系统取证链路」这一种做法。
  *
- * → 正确做法是**回捞**：`ApplicationExitInfo(REASON_CRASH_NATIVE)` 拿 proto trace
- *   （见 `AnrMonitor.ExitInfoCollector`），原始字节原样上传，平台侧符号化。
- *   在 App 内自己实现 proto 解析 + 符号化是负收益。
+ * 现在 `app/src/main/cpp/native_crash_handler.cpp` 做的是**另一种**
+ * （Crashpad / xCrash 的做法）：
+ *
+ * ```
+ *   崩溃 → 内核投递信号 → [我们的 handler：只抓现场 + 落盘] → 链式交回原 handler
+ *                                       └──────► debuggerd → tombstone **照旧产生**
+ * ```
+ *
+ * 取证是**增量**，平台证据一个都不少，所以那三条理由不再构成否决：
+ *   · 我们不"顶掉"系统 handler，而是**接着它跑**（`handOffToSystem` 会调用安装时
+ *     保存的原 handler；原 handler 是 SIG_DFL 时用 tgkill 原样重发）；
+ *   · tombstone 与不装时**一致**（debuggerd 自己抓 backtrace/寄存器/内存映射）。
+ *
+ * 代价是换来了两条**新的**边界，写在 `native_crash_handler.cpp` 文件头 §五：
+ *   ① `_Unwind_Backtrace` 在信号处理器里「尽力而为」（崩溃点在 linker 锁内可能死锁）；
+ *   ② 报告只带 `模块名+偏移`，不能在设备上符号化（Release 无 .symtab、dladdr 不可用）。
+ *
+ * 因此现在的分工是**互补而非替代**：
+ *   · `native_crash_handler.cpp`：**API 24+** 可用、有 fd/status/全线程栈、文本可 cat；
+ *   · 下面这条 ExitInfo 回捞：系统视角、更完整，但**要 API 30+**；
+ *     且当我们的 handler 死锁时，它是唯一兜底。
+ *
+ * ⚠️ 实验入口在 `StabilityLabActivity` 的「Native 取证」那一排按钮
+ *    （三种崩溃形态 + 回捞），`CrashMonitor` 本身不参与那条链路。
+ *
+ * ─── 以下为原有说明（三条理由仍然正确，适用范围已收敛为"替换式做法"）───
+ *
+ * 1. **信号处理器运行在崩溃现场，栈可能已经损坏**，能在里面安全调用的函数极少；
+ * 2. ART 自己就装了 handler（用于把 native crash 转成 Java 异常的地方）——
+ *    抢装/链式调用容易把系统的崩溃收集（debuggerd/tombstone）搞坏，
+ *    反而**丢掉平台侧证据**；
+ * 3. Android 10+ 有 **crash_dump / debuggerd** 这套统一机制，
+ *    自己抓的质量不如系统，且拿不到符号化所需的全部上下文。
+ *
+ * → 回捞这条路**仍然保留、且必须保留**：`ApplicationExitInfo(REASON_CRASH_NATIVE)`
+ *   拿 proto trace（见 `AnrMonitor.ExitInfoCollector`），原始字节原样上传，
+ *   平台侧符号化。在 App 内自己实现 proto 解析 + 符号化是负收益。
  */
 object CrashMonitor {
 

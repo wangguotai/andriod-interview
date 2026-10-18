@@ -11,6 +11,7 @@ import androidx.appcompat.app.AppCompatActivity
 import com.example.myapplication.R
 import com.interview.thread.ThreadPools
 import java.util.concurrent.TimeUnit
+import com.interview.nativecrash.NativeCrashHandler
 
 /**
  * Time: 2026/10/7
@@ -351,17 +352,130 @@ class StabilityLabActivity : AppCompatActivity() {
 
         bind(R.id.btn_native_crash) {
             emit(
-                "【Native 崩溃：App 内接不住，也不该硬接】\n" +
-                        "可以在 native 注册 SIGSEGV handler 自己抓，但本项目**刻意不做**：\n" +
-                        "  1. 信号处理器运行在崩溃现场，栈可能已损坏，能安全调用的函数极少；\n" +
-                        "  2. 抢装 handler 容易破坏系统自己的崩溃收集（debuggerd/tombstone），\n" +
-                        "     反而**丢掉平台侧证据**；\n" +
-                        "  3. Android 10+ 的 crash_dump/debuggerd 质量更高且带符号化上下文。\n\n" +
-                        "正确做法 = 回捞：ExitInfo 的 REASON_CRASH_NATIVE 会给一份 **protobuf** trace。\n" +                        "  原始字节原样上传，绝不当文本保存/传输（会被编码层改写字节）；\n" +
-                        "  在平台侧用 ndk-stack / Crashpad 符号化。\n" +
-                        "  App 内自己写 proto 解析是负收益：没有 .proto 契约、没有符号表。\n\n" +
-                        "（本按钮只输出说明，不真的崩 native —— 崩了本页就演示不下去了。）"
+                "【Native 崩溃：先说清楚「接不住」这个结论的适用范围】\n" +
+                        "本页原来在这里写着「App 内不该接 native 崩溃，本项目刻意不做」。\n" +
+                        "那个结论**本身没错，但它只否决了一种做法** —— 用自研 handler **替换**\n" +
+                        "系统的取证链路。下面这一排按钮做的是**另一种**（Crashpad / xCrash 的做法）：\n\n" +
+                        "    崩溃 → 内核投递信号 → [我们：只抓现场+落盘] → 链式交回原 handler\n" +
+                        "                            └──► debuggerd → tombstone **照旧产生**\n\n" +
+                        "也就是说取证是**增量**，平台的证据一个都不少。所以原来那三条理由\n" +
+                        "（信号上下文不安全 / 破坏 debuggerd / 抓得不如系统）在这里不成立：\n" +
+                        "  · 我们是**接着**系统 handler 跑，不是顶掉它（见 native 侧 handOffToSystem）；\n" +
+                        "  · 它拿到的 tombstone 与不装时**完全一致**（这点必须在真机上核对）。\n\n" +
+                        "⚠️ 换来了两条**新的**、必须写在明面上的边界：\n" +
+                        "  1. `_Unwind_Backtrace` 在信号处理器里是「尽力而为」：崩溃点若在动态链接\n" +
+                        "     器锁内（如 dlopen 里），我们可能死锁 → 报告落不下来，但 tombstone 仍在。\n" +
+                        "     生产级做法是自带 libunwindstack 做内存解析 —— 而\n" +
+                        "     /system/lib64/libunwindstack.so **不在 public.libraries.txt 里**，\n" +
+                        "     App 不能 dlopen（实测确认），所以本仓库选择「用 NDK 自带的 unwinder，\n" +
+                        "     并把边界写在明面上」。\n" +
+                        "  2. 报告只带 `模块名+偏移`，不能在设备上符号化（Release 无 .symtab、\n" +
+                        "     dladdr 会重入 linker 锁）。事后用 tools/native-mem-symbolize.sh 还原。\n\n" +
+                        "它与 ExitInfo 回捞是**互补**，不是替代：\n" +
+                        "  · 本通道 **API 24+** 可用（ExitInfo 要 API 30+，本仓库 minSdk 24）；\n" +
+                        "  · 本通道有 fd 表 / 进程状态 / 全线程栈，且是**文本**、cat 就能看；\n" +
+                        "  · 我们 handler 万一死锁时，还靠 ExitInfo 兜底。\n\n" +
+                        "→ 现在去点下面那排 ⚠ 按钮，真的崩一次，再回来点「回捞Native报告」。"
             )
+        }
+
+        // ═══════ Native 崩溃取证（进程内）═══════
+
+        bind(R.id.btn_native_grab) {
+            emit(
+                "【Native 取证安装状态】\n" +
+                        "机制：接管 SIGSEGV/ABRT/BUS/ILL/FPE/TRAP/SYS 七个信号，\n" +
+                        "抓「崩溃线程栈 → 给其他线程发 SIGRTMIN+3 让它们各自抓自己的栈 → maps/fd/status」，\n" +
+                        "落盘后**把信号链式交回系统**（tombstone 照旧）。\n\n"
+            )
+            emit(NativeCrashCollector.describeStatus(this))
+        }
+
+        bind(R.id.btn_native_recover) {
+            emit("回捞中（后台泳道）…")
+            ThreadPools.background.execute("native.demo.recover") {
+                val n = NativeCrashCollector.recoverAndReport(this)
+                val text = NativeCrashCollector.latestReportText(this)
+                runOnUiThread {
+                    emit(
+                        "【Native 报告回捞】\n本次回捞到 $n 份并已交给上报出口。\n\n" +
+                                (if (text == null) "目录里没有任何报告。\n" +
+                                        "→ 先点下面某个 ⚠ 按钮真的崩一次，重启 App 后再来点这里。\n"
+                                else "── 最近一份报告（原文，可对照 NATIVE_CRASH_FORMAT.md）──\n" +
+                                        text.take(6000) +
+                                        if (text.length > 6000) "\n……（截断，完整内容见报告文件）" else "")
+                    )
+                }
+            }
+        }
+
+        bind(R.id.btn_native_upload) {
+            emit(
+                "【上报出口状态】\n" +
+                        "⚠️ 这里必须把「当前处于哪一档」说清楚，否则会误判成'能上报了'：\n\n" +
+                        (if (CrashUploader.isConfigured())
+                            "  ✅ **真实 HTTP**：endpoint 已配置。\n" +
+                                    "     2xx 才算成功（才清账/清遗嘱）；4xx 不重试；5xx/网络异常最多重试 2 次。\n" +
+                                    "     endpoint/token 来自 local.properties（不入库），经 BuildConfig 注入 ——\n" +
+                                    "     所以改配置后**必须重新构建**才生效。\n\n"
+                        else
+                            "  ⚠️ **模拟提交**：local.properties 里没有 crash.upload.url。\n" +
+                                    "     此时 ReportDriver 走本地链路，\"已提交 N 批次\"只代表**本地链路走通了**，\n" +
+                                    "     **没有任何网络请求发出**。配法见 local.properties 的注释示例。\n" +
+                                    "     为什么没配时不干脆返回 false：那会让事件永远留在缓冲里、\n" +
+                                    "     实验页什么都看不到（见 ReportDriver.uploadBatch 的注释）。\n\n") +
+                        CrashUploader.describe() + "\n\n" +
+                        "崩溃上报的完整链路（含 native）：\n" +
+                        "  native 信号 → 落盘报告 → 下次启动回捞 → 解析 → StabilityReporter 环形缓冲\n" +
+                        "  → CrashJournal 遗嘱（同步落盘）→ ReportDriver.flush → 【本出口】\n" +
+                        "  成功(true) 才 acknowledge 遗嘱 —— 崩溃 handler 不能自证'我报完了'。"
+            )
+        }
+
+        bind(R.id.btn_native_abort) {
+            emit(
+                "⚠️【即将主动触发 SIGABRT —— 进程会立刻死掉】\n\n" +
+                        "为什么用 abort() 而不是空指针写：\n" +
+                        "  · abort() → SIGABRT，si_code = **SI_TKILL**，来源可辨（就是'我们主动的'）；\n" +
+                        "  · 空指针写 → SIGSEGV/SEGV_MAPERR，与真实业务崩溃**无法区分**。\n" +
+                        "    实验数据混进真实数据里，是比自己写错更难发现的问题。\n\n" +
+                        "预期：\n" +
+                        "  1. 进程立即死（logcat 可见 debuggerd 的 tombstone 输出 —— 证明**没抢掉**系统取证）；\n" +
+                        "  2. files/native-crash/ 下出现 report-*.txt；\n" +
+                        "  3. 重启 App → 本页「回捞Native报告」能看到完整现场。\n" +
+                        "对照：此时 logcat 里**同时**有系统 tombstone 与我们的报告 —— 两者都要有。"
+            )
+            if (!NativeCrashHandler.crashByAbort("Lab: 主动 SIGABRT（si_code 归因对照）")) {
+                emit("⚠️ native 库不可用（非 arm64 设备？），无法触发")
+            }
+        }
+
+        bind(R.id.btn_native_null) {
+            emit(
+                "⚠️【即将空指针解引用 —— SIGSEGV / SEGV_MAPERR / fault_addr=0x0】\n" +
+                        "用来与 ABRT 按钮做 si_code 对照：\n" +
+                        "  · SEGV_MAPERR = 地址**未映射**（空指针/野指针/use-after-free）\n" +
+                        "  · SEGV_ACCERR = 地址已映射但**无权限**（越界写只读段）\n" +
+                        "两者的修复方向完全不同，所以报告里 si_code 与 fault_addr 是分开的两个字段。"
+            )
+            if (!NativeCrashHandler.crashByNullDeref()) {
+                emit("⚠️ native 库不可用，无法触发")
+            }
+        }
+
+        bind(R.id.btn_native_stack) {
+            emit(
+                "⚠️【即将栈溢出 —— SIGSEGV，fault_addr 贴着栈底而不是 0】\n" +
+                        "这是「必须看 fault_addr，不能只看 si_code」的实例：\n" +
+                        "  它和空指针一样都是 SEGV_MAPERR，但 fault_addr 完全不同 ——\n" +
+                        "  一个在 0x0，一个在栈 VMA 边界外。\n" +
+                        "另外它会检验备用信号栈（SA_ONSTACK + sigaltstack）：\n" +
+                        "  栈已经不能用了，不切到 alt stack 的话 handler 一压栈就二次崩溃，\n" +
+                        "  报告一个字都落不下来。"
+            )
+            if (!NativeCrashHandler.crashByStackOverflow()) {
+                emit("⚠️ native 库不可用，无法触发")
+            }
         }
 
         bind(R.id.btn_events) {

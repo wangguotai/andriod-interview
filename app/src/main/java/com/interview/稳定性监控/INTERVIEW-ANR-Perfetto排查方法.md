@@ -28,13 +28,18 @@ select name from sqlite_master where type='table' order by name
 | slice / 输入 / Choreographer | ✅ **有** | 715 种不同 slice 名 |
 | **`blocked_function`**（内核阻塞原因） | ❌ **全 NULL** | 需 `sched` 配置里带 `sched_blocked_reason`，本 trace 没开 |
 | **`cpu_counter_track`**（CPU 频率） | ❌ **空** | 没订阅 `linux.cpu.frequency` |
-| **GC 轨迹** | ❌ **没有** | ⚠️ 注意 `like '%gc%'` 会命中 `Handler` 等词，**是假阳性**（我实测踩过） |
+| **GC 轨迹** | ❌ **没有** | ⚠️ 注意 `like '%gc%'` 会命中 `Handler` 等词，**是假阳性**（我实测踩过）。要 GC/堆曲线须加 `atrace_categories: "dalvik"`（已实测证实，见 crash 篇 §7） |
 | **`actual_frame_timeline_slice`**（帧时间线） | ❌ **空** | 没订阅 `android.frames.timeline` |
 
 > 🔑 **实战含义**：这份 trace **只能做"在等谁 / 谁在跑"级别**的定位，**做不了**"为什么等"（内核阻塞原因）和"GC 抖不抖"。
 > 要补这些，采集配置里加：`linux.ftrace{ ftrace_events: "sched/sched_blocked_reason" }` +
-> `linux.cpu.frequency` + `android.frames.timeline` + `art`/`heapprofd`。
+> `linux.cpu.frequency` + `android.frames.timeline` + **`atrace_categories: "dalvik"`**（GC/堆曲线）+ `heapprofd`。
 > （本仓 `tools/perfetto/scroll-trace.cfg` 就是这么组织的，可参考。）
+>
+> ⚠️ **但要注意**：加 `sched_blocked_reason` 后**本机 user build 上仍然拿不到函数名** ——
+> 实测已订阅成功（20,542 条事件），但符号解析需要读内核 `format` 文件，
+> SELinux 拒绝（`avc: denied { read } ... format`），所以 `blocked_function` 依旧全 NULL。
+> 这是**权限天花板，不是配置问题**。详见 [`INTERVIEW-Crash-Perfetto排查方法.md`](INTERVIEW-Crash-Perfetto排查方法.md) §7。
 
 ### 一条"起手式"：自动找冻结窗口（不用手填秒数）
 
@@ -266,9 +271,13 @@ select round(s.dur/1e6,1) ms, s.name
 from slice s join thread_track tt on s.track_id=tt.id join thread t on tt.utid=t.utid
 where t.tid=8628 and (s.name like '%GC%' or s.name like '%GarbageCollect%')
 ```
-> GC 要看，得订阅 **`art` / heapprofd** 数据源。
-> 另有旁证：**`logcat` 里的 `GC` 行**（`Background concurrent copying GC ... paused 12.3ms`），
-> 或用 `android.log` 数据源把它并进 trace。
+> GC 要看，得在 ftrace 配置里加 **`atrace_categories: "dalvik"`** ——
+> 它同时带来 GC 切片（`Background concurrent copying GC`）与 **`Heap size (KB)` 堆曲线**。
+> **这一条已在 `INTERVIEW-Crash-Perfetto排查方法.md` §7 实测证实**（加了 dalvik 才有，
+> 不加则两者都没有）；本 ANR trace 的采集配置没加，所以查不到。
+> 另有旁证：**`logcat` 里的 `GC` 行**（`Background concurrent copying GC ... paused 12.3ms`）。
+> ⚠️ 注意：`android.log` 数据源在本机 user build 上**收不到日志**（需 `READ_LOGS` 特权），
+> 实测 `android_log_num_total=0`，所以 logcat 要**单独 `adb logcat` 抓**。
 
 **③ 看是不是被别人抢 CPU**（✔实测，全局视角）
 ```sql
